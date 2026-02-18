@@ -13,7 +13,7 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 # Scraping
 CHECK_INTERVAL_MINUTES = int(os.getenv("CHECK_INTERVAL_MINUTES", "10"))
-HYPE_THRESHOLD = int(os.getenv("HYPE_THRESHOLD", "7"))
+HYPE_THRESHOLD = int(os.getenv("HYPE_THRESHOLD", "8"))
 
 # Список источников F1
 F1_SOURCES = [

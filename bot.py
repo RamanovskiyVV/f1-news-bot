@@ -114,9 +114,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Команды:\n"
         "/start — Приветствие\n"
         "/check — Проверить новости прямо сейчас\n"
-        "/digest — Показать новости с хайпом 3-6 за сегодня\n"
+        "/digest — Показать новости с хайпом 3-7 за сегодня\n"
         "/status — Статус бота\n"
-        "/sethype <число> — Изменить порог хайпа (текущий: {threshold})\n\n"
+        "/sethype &lt;число&gt; — Изменить порог хайпа (текущий: {threshold})\n\n"
         "Бот автоматически проверяет новости каждые {interval} минут.".format(
             threshold=HYPE_THRESHOLD,
             interval=CHECK_INTERVAL_MINUTES,
@@ -414,20 +414,20 @@ async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     today = date.today().isoformat()
     today_news = daily_news_cache.get(today, [])
 
-    # Фильтр: хайп от 3 до 6 (не попавшие в горячие, но не совсем мусор)
-    medium_news = [n for n in today_news if 3 <= n["hype_score"] <= 6]
+    # Фильтр: хайп от 3 до 7 (не попавшие в горячие, но не совсем мусор)
+    medium_news = [n for n in today_news if 3 <= n["hype_score"] <= 7]
     medium_news.sort(key=lambda x: x["hype_score"], reverse=True)
 
     if not medium_news:
         await update.message.reply_text(
-            f"📭 Новостей с хайпом 3-6 за сегодня не найдено.\n\n"
+            f"📭 Новостей с хайпом 3-7 за сегодня не найдено.\n\n"
             f"Всего новостей в дневном кэше: {len(today_news)}\n"
             f"Попробуйте сначала /check чтобы собрать свежие новости."
         )
         return
 
     await update.message.reply_text(
-        f"📋 Новости с хайпом 3-6 за сегодня: {len(medium_news)} шт."
+        f"📋 Новости с хайпом 3-7 за сегодня: {len(medium_news)} шт."
     )
 
     for item_data in medium_news:
