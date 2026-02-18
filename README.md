@@ -61,7 +61,6 @@ copy .env.example .env       # Windows
 | Переменная | Описание | По умолчанию |
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | Токен бота от [@BotFather](https://t.me/BotFather) | — |
-| `TELEGRAM_CHAT_ID` | Ваш Chat ID ([@userinfobot](https://t.me/userinfobot)) | — |
 | `TELEGRAM_CHANNEL_ID` | ID канала (`@username` или `-100xxx`) | — |
 | `OPENAI_API_KEY` | API-ключ OpenAI | — |
 | `OPENAI_MODEL` | Модель OpenAI | `gpt-4o-mini` |

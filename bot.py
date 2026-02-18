@@ -28,7 +28,6 @@ from telegram.constants import ParseMode
 
 from config import (
     TELEGRAM_BOT_TOKEN,
-    TELEGRAM_CHAT_ID,
     TELEGRAM_CHANNEL_ID,
     HYPE_THRESHOLD,
     CHECK_INTERVAL_MINUTES,
@@ -51,6 +50,8 @@ photo_state: dict[int, str] = {}
 # Дневной кэш ВСЕХ проанализированных новостей (дата -> список dict)
 # Хранит новости за текущий день для команды /digest
 daily_news_cache: dict[str, list[dict]] = {}
+# Chat ID владельца — запоминается при первом /start
+owner_chat_id: Optional[int] = None
 
 
 def hype_emoji(score: int) -> str:
@@ -103,6 +104,10 @@ def generated_post_keyboard(uid: str) -> InlineKeyboardMarkup:
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start."""
+    global owner_chat_id
+    owner_chat_id = update.message.chat_id
+    logger.info(f"Owner chat_id сохранён: {owner_chat_id}")
+
     await update.message.reply_text(
         "🏎️ <b>F1 News Bot</b>\n\n"
         "Я мониторю новостные сайты о Формуле 1 и присылаю тебе самые горячие новости.\n\n"
@@ -450,6 +455,10 @@ async def scheduled_check(context: ContextTypes.DEFAULT_TYPE):
     """Фоновая задача — автоматическая проверка новостей."""
     logger.info("Запуск автоматической проверки новостей...")
 
+    if owner_chat_id is None:
+        logger.warning("owner_chat_id не задан. Отправьте /start боту.")
+        return
+
     try:
         news = collect_new_news()
         if not news:
@@ -485,7 +494,7 @@ async def scheduled_check(context: ContextTypes.DEFAULT_TYPE):
                 "hype_score": item.hype_score,
             }
             await context.bot.send_message(
-                chat_id=TELEGRAM_CHAT_ID,
+                chat_id=owner_chat_id,
                 text=format_news_alert(item),
                 parse_mode=ParseMode.HTML,
                 reply_markup=news_alert_keyboard(item.uid),
