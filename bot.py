@@ -12,6 +12,7 @@ from typing import Optional
 
 from telegram import (
     Bot,
+    BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Update,
@@ -52,6 +53,18 @@ photo_state: dict[int, str] = {}
 daily_news_cache: dict[str, list[dict]] = {}
 # Chat ID владельца — запоминается при первом /start
 owner_chat_id: Optional[int] = None
+
+
+def markdown_to_html(text: str) -> str:
+    """Конвертировать Markdown-форматирование в HTML для Telegram."""
+    import re
+    # **bold** -> <b>bold</b>
+    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+    # *italic* -> <i>italic</i>
+    text = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', text)
+    # `code` -> <code>code</code>
+    text = re.sub(r'`(.+?)`', r'<code>\1</code>', text)
+    return text
 
 
 def hype_emoji(score: int) -> str:
@@ -248,7 +261,7 @@ async def handle_generate(query, uid: str, is_regen: bool = False):
             f"📝 <b>Сгенерированный пост:</b>\n\n{post}",
             parse_mode=ParseMode.HTML,
             reply_markup=generated_post_keyboard(uid),
-            disable_web_page_preview=True,
+            disable_web_page_preview=False,
         )
 
     except Exception as e:
@@ -271,13 +284,13 @@ async def handle_publish(query, uid: str, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=TELEGRAM_CHANNEL_ID,
                 photo=post_photos[uid],
                 caption=post[:1024],  # Telegram ограничивает caption до 1024 символов
-                parse_mode=None,
+                parse_mode=ParseMode.HTML,
             )
         else:
             await context.bot.send_message(
                 chat_id=TELEGRAM_CHANNEL_ID,
                 text=post,
-                parse_mode=None,
+                parse_mode=ParseMode.HTML,
                 disable_web_page_preview=False,
             )
         await query.message.reply_text("✅ Пост успешно отправлен в канал!")
@@ -368,7 +381,8 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if chat_id in editing_state:
         uid = editing_state.pop(chat_id)
-        new_text = update.message.text.strip()
+        new_text = update.message.text_html or update.message.text or ""
+        new_text = new_text.strip()
 
         if new_text.startswith("/"):
             await update.message.reply_text("❌ Редактирование отменено.")
@@ -506,9 +520,20 @@ async def scheduled_check(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка автоматической проверки: {e}", exc_info=True)
 
 
+async def post_init(application: Application):
+    """Установить подсказки команд в меню бота."""
+    await application.bot.set_my_commands([
+        BotCommand("start", "Приветствие и справка"),
+        BotCommand("check", "Проверить новости прямо сейчас"),
+        BotCommand("digest", "Дайджест новостей (хайп 3-7) за сегодня"),
+        BotCommand("status", "Статус бота"),
+    ])
+    logger.info("Меню команд установлено")
+
+
 def create_bot() -> Application:
     """Создать и настроить Telegram-бота."""
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
 
     # Команды
     app.add_handler(CommandHandler("start", cmd_start))
