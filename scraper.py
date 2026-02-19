@@ -52,9 +52,12 @@ def load_seen() -> set[str]:
 
 
 def save_seen(seen: set[str]):
-    """Сохранить список обработанных новостей."""
+    """Сохранить список обработанных новостей (макс. 1000 последних)."""
+    items = list(seen)
+    if len(items) > 1000:
+        items = items[-1000:]
     with open(SEEN_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(seen), f)
+        json.dump(items, f)
 
 
 def fetch_rss(source: dict) -> list[NewsItem]:
