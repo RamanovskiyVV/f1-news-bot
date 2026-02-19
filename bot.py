@@ -7,7 +7,9 @@ import asyncio
 import html
 import json
 import logging
+import os
 from datetime import date
+from pathlib import Path
 from typing import Optional
 
 from telegram import (
@@ -52,7 +54,29 @@ photo_state: dict[int, str] = {}
 # Хранит новости за текущий день для команды /digest
 daily_news_cache: dict[str, list[dict]] = {}
 # Chat ID владельца — запоминается при первом /start
+# Сохраняется в файл для переживания рестартов
+OWNER_CHAT_ID_FILE = Path(__file__).parent / "owner_chat_id.json"
 owner_chat_id: Optional[int] = None
+
+
+def _load_owner_chat_id() -> Optional[int]:
+    """Загрузить owner_chat_id из файла."""
+    if OWNER_CHAT_ID_FILE.exists():
+        try:
+            data = json.loads(OWNER_CHAT_ID_FILE.read_text())
+            chat_id = data.get("owner_chat_id")
+            if chat_id is not None:
+                logger.info(f"owner_chat_id загружен из файла: {chat_id}")
+                return int(chat_id)
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"Ошибка чтения owner_chat_id: {e}")
+    return None
+
+
+def _save_owner_chat_id(chat_id: int) -> None:
+    """Сохранить owner_chat_id в файл."""
+    OWNER_CHAT_ID_FILE.write_text(json.dumps({"owner_chat_id": chat_id}))
+    logger.info(f"owner_chat_id сохранён в файл: {chat_id}")
 
 
 def markdown_to_html(text: str) -> str:
@@ -119,6 +143,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start."""
     global owner_chat_id
     owner_chat_id = update.message.chat_id
+    _save_owner_chat_id(owner_chat_id)
     logger.info(f"Owner chat_id сохранён: {owner_chat_id}")
 
     await update.message.reply_text(
@@ -533,6 +558,9 @@ async def post_init(application: Application):
 
 def create_bot() -> Application:
     """Создать и настроить Telegram-бота."""
+    global owner_chat_id
+    owner_chat_id = _load_owner_chat_id()
+
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
 
     # Команды

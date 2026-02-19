@@ -3,4 +3,5 @@ __pycache__/
 .env
 venv/
 seen_news.json
+owner_chat_id.json
 bot.log
