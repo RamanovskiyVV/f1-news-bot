@@ -735,6 +735,46 @@ async def post_init(application: Application):
     logger.info("Меню команд установлено")
 
 
+async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Перехватывать все посты канала (включая ручные) для истории."""
+    msg = update.channel_post
+    if not msg:
+        return
+
+    # Проверить что это наш канал
+    chat_id_str = str(msg.chat_id)
+    if TELEGRAM_CHANNEL_ID and not (
+        chat_id_str == TELEGRAM_CHANNEL_ID
+        or msg.chat.username and f"@{msg.chat.username}" == TELEGRAM_CHANNEL_ID
+    ):
+        return
+
+    text = msg.text or msg.caption or ""
+    if not text.strip():
+        return
+
+    # Проверить что этот message_id ещё не сохранён (избежать дублей от ботовых постов)
+    from storage import load_published
+    existing = load_published()
+    existing_msg_ids = {p.get("channel_message_id") for p in existing}
+    if msg.message_id in existing_msg_ids:
+        return
+
+    # Извлечь заголовок — первая строка текста
+    title = text.split("\n")[0][:80]
+    # Убрать HTML-теги из заголовка
+    import re
+    title = re.sub(r"<[^>]+>", "", title).strip()
+
+    add_published(
+        uid=f"manual_{msg.message_id}",
+        title=title or "Ручной пост",
+        text=text,
+        channel_message_id=msg.message_id,
+    )
+    logger.info(f"Сохранён пост канала: msg_id={msg.message_id}, title={title[:40]}")
+
+
 def create_bot() -> Application:
     """Создать и настроить Telegram-бота."""
     global owner_chat_id
@@ -756,6 +796,9 @@ def create_bot() -> Application:
 
     # Текстовые сообщения (для редактирования)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+
+    # Посты канала (сохраняем все, включая ручные)
+    app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, handle_channel_post))
 
     # Автоматическая проверка по расписанию
     job_queue = app.job_queue
