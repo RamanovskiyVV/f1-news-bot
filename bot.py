@@ -791,14 +791,18 @@ def create_bot() -> Application:
     # Inline-кнопки
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    # Фото (для прикрепления к постам)
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
-
-    # Текстовые сообщения (для редактирования)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
-
-    # Посты канала (сохраняем все, включая ручные)
+    # Посты канала (сохраняем все, включая ручные) — ПЕРЕД photo/text чтобы не перехватывались
     app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, handle_channel_post))
+
+    # Фото (для прикрепления к постам) — только личные сообщения
+    app.add_handler(MessageHandler(
+        filters.PHOTO & ~filters.UpdateType.CHANNEL_POST, handle_photo_message
+    ))
+
+    # Текстовые сообщения (для редактирования) — только личные сообщения
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & ~filters.UpdateType.CHANNEL_POST, handle_text_message
+    ))
 
     # Автоматическая проверка по расписанию
     job_queue = app.job_queue
