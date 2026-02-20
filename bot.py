@@ -746,16 +746,11 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not msg:
         return
 
-    # Проверить что это наш канал
-    chat_id_str = str(msg.chat_id)
-    if TELEGRAM_CHANNEL_ID and not (
-        chat_id_str == TELEGRAM_CHANNEL_ID
-        or msg.chat.username and f"@{msg.chat.username}" == TELEGRAM_CHANNEL_ID
-    ):
-        return
+    logger.info(f"Получен пост канала: chat_id={msg.chat_id}, msg_id={msg.message_id}")
 
     text = msg.text or msg.caption or ""
     if not text.strip():
+        logger.info("Пост канала без текста — пропущен")
         return
 
     # Проверить что этот message_id ещё не сохранён (избежать дублей от ботовых постов)
