@@ -64,6 +64,18 @@ def get_recent_posts(n: int = 10) -> list[dict]:
     return posts[-n:]
 
 
+def remove_posts_by_msg_ids(msg_ids: set[int]) -> None:
+    """Удалить посты с указанными channel_message_id (удалены из канала)."""
+    if not msg_ids:
+        return
+    posts = load_published()
+    before = len(posts)
+    posts = [p for p in posts if p.get("channel_message_id") not in msg_ids]
+    if len(posts) < before:
+        save_published(posts)
+        logger.info(f"Удалено {before - len(posts)} постов из хранилища (удалены из канала)")
+
+
 def get_recent_posts_for_context(n: int = 7) -> list[str]:
     """Получить тексты последних N постов для контекста генерации.
     

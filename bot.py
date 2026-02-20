@@ -45,6 +45,7 @@ from storage import (
     load_published,
     load_daily_cache,
     save_daily_cache,
+    remove_posts_by_msg_ids,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,42 @@ def _save_owner_chat_id(chat_id: int) -> None:
     """Сохранить owner_chat_id в файл."""
     OWNER_CHAT_ID_FILE.write_text(json.dumps({"owner_chat_id": chat_id}))
     logger.info(f"owner_chat_id сохранён в файл: {chat_id}")
+
+
+async def _cleanup_deleted_posts(bot) -> list[dict]:
+    """Проверить, существуют ли посты в канале. Удалить удалённые. Вернуть живые."""
+    posts = get_recent_posts(50)
+    if not posts:
+        return []
+
+    deleted_ids = set()
+    for p in posts:
+        msg_id = p.get("channel_message_id")
+        if not msg_id:
+            continue
+        try:
+            # copyMessage с from → to (owner), затем удаляем копию
+            # Это самый надёжный способ проверить существование поста
+            copied = await bot.copy_message(
+                chat_id=owner_chat_id,
+                from_chat_id=TELEGRAM_CHANNEL_ID,
+                message_id=msg_id,
+            )
+            # Сразу удалить скопированное сообщение
+            try:
+                await bot.delete_message(chat_id=owner_chat_id, message_id=copied.message_id)
+            except Exception:
+                pass
+        except Exception:
+            # Пост удалён или недоступен
+            deleted_ids.add(msg_id)
+            logger.info(f"Пост msg_id={msg_id} удалён из канала — убираю из хранилища")
+
+    if deleted_ids:
+        remove_posts_by_msg_ids(deleted_ids)
+        posts = [p for p in posts if p.get("channel_message_id") not in deleted_ids]
+
+    return posts
 
 
 def markdown_to_html(text: str) -> str:
@@ -270,7 +307,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == "photo":
         await handle_photo_request(query, uid, context)
     elif action == "replyselect":
-        await handle_reply_select(query, uid)
+        page = int(extra) if extra.isdigit() else 0
+        await handle_reply_select(query, uid, context.bot, page)
     elif action == "replypick":
         await handle_reply_pick(query, uid)
     elif action == "replyclear":
@@ -347,7 +385,7 @@ async def handle_publish(query, uid: str, context: ContextTypes.DEFAULT_TYPE):
     # Если reply не выбран вручную — попробовать найти автоматически
     if reply_msg_id is None:
         await query.message.reply_text("⏳ Проверяю связь с предыдущими постами...")
-        published = get_recent_posts(20)
+        published = await _cleanup_deleted_posts(context.bot)
         if published:
             news_data = news_cache.get(uid, {})
             related_uid = await find_related_post(
@@ -483,22 +521,38 @@ async def handle_photo_request(query, uid: str, context: ContextTypes.DEFAULT_TY
     photo_state[chat_id] = uid
 
 
-async def handle_reply_select(query, uid: str):
-    """Показать список последних постов для выбора reply."""
-    published = get_recent_posts(10)
+async def handle_reply_select(query, uid: str, bot, page: int = 0):
+    """Показать список постов для выбора reply (по 5 штук, новые сверху)."""
+    published = await _cleanup_deleted_posts(bot)
     if not published:
         await query.message.reply_text("📭 Нет опубликованных постов для reply.")
         return
 
+    PAGE_SIZE = 5
+    # Сортировка: новые первые
+    published_desc = list(reversed(published))
+    total = len(published_desc)
+    start = page * PAGE_SIZE
+    page_posts = published_desc[start : start + PAGE_SIZE]
+
+    if not page_posts:
+        await query.message.reply_text("📭 Больше постов нет.")
+        return
+
     buttons = []
-    for p in reversed(published):  # Новые сверху
+    for p in page_posts:
         title = p.get("title", "Без заголовка")[:45]
-        p_uid = p.get("uid", "")
         msg_id = p.get("channel_message_id", 0)
-        # callback_data: replypick:news_uid:published_msg_id
         buttons.append([InlineKeyboardButton(
             f"📌 {title}",
             callback_data=f"replypick:{uid}:{msg_id}",
+        )])
+
+    # Кнопка "Ещё 5" если есть следующая страница
+    if start + PAGE_SIZE < total:
+        buttons.append([InlineKeyboardButton(
+            "➡️ Ещё 5...",
+            callback_data=f"replyselect:{uid}:{page + 1}",
         )])
 
     # Кнопка "Без reply"
@@ -507,11 +561,20 @@ async def handle_reply_select(query, uid: str):
         callback_data=f"replyclear:{uid}",
     )])
 
-    await query.message.reply_text(
-        "↩️ <b>Выберите пост для reply:</b>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(buttons),
-    )
+    text = f"↩️ <b>Выберите пост для reply</b> (стр. {page + 1}):"
+    if page == 0:
+        await query.message.reply_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+    else:
+        # Обновить существующее сообщение вместо нового
+        await query.edit_message_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
 
 
 async def handle_reply_pick(query, uid: str):
