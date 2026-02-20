@@ -6,6 +6,8 @@ F1 News Bot — Точка входа.
 import logging
 import sys
 
+from telegram import Update
+
 from config import TELEGRAM_BOT_TOKEN, OPENAI_API_KEY, TELEGRAM_CHANNEL_ID
 from bot import create_bot
 
@@ -48,7 +50,7 @@ def main():
 
     app = create_bot()
     logger.info("✅ Бот запущен. Ожидание сообщений...")
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
