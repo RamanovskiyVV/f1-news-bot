@@ -35,7 +35,7 @@ from config import (
     HYPE_THRESHOLD,
     CHECK_INTERVAL_MINUTES,
 )
-from scraper import NewsItem, collect_new_news, fetch_article_content, clear_seen, load_seen
+from scraper import NewsItem, collect_new_news, fetch_article_content
 from analyzer import analyze_news_batch, generate_news_post, find_related_post
 from storage import (
     add_published,
@@ -62,6 +62,8 @@ post_photos: dict[str, str] = {}
 photo_state: dict[int, str] = {}
 # Выбранный reply-target (uid новости -> channel_message_id)
 reply_targets: dict[str, int] = {}
+# Просмотренные через /digest uid (чистятся через /clear)
+digest_seen: set[str] = set()
 # Дневной кэш ВСЕХ проанализированных новостей (дата -> список dict)
 # Хранит новости за текущий день для команды /digest, сохраняется в файл
 daily_news_cache: dict[str, list[dict]] = load_daily_cache()
@@ -321,13 +323,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _do_publish(query, uid, generated_posts[uid], msg_id, context)
         except (ValueError, KeyError) as e:
             await query.message.reply_text(f"❌ Ошибка: {e}")
-    elif action == "clearseen":
-        if uid == "confirm":
-            count = clear_seen()
-            await query.edit_message_text(f"✅ Бакет очищен — удалено {count} записей.")
-        else:
-            await query.edit_message_text("👌 Отменено.")
-        return
     elif action == "publishnow":
         # Публиковать без reply
         if uid in generated_posts:
@@ -703,28 +698,27 @@ def _save_to_daily_cache(items: list[NewsItem]):
 
 
 async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Очистить бакет обработанных новостей."""
+    """Пометить все текущие дайджест-новости как просмотренные."""
     chat_id = update.effective_chat.id
     if owner_chat_id and chat_id != owner_chat_id:
         return
 
-    count = len(load_seen())
-    if count == 0:
-        await update.message.reply_text("📭 Бакет уже пуст.")
+    today = date.today().isoformat()
+    today_news = daily_news_cache.get(today, [])
+    medium = [n for n in today_news if 3 <= n["hype_score"] <= 7 and n["uid"] not in digest_seen]
+
+    if not medium:
+        await update.message.reply_text("📭 Нет непросмотренных дайджест-новостей.")
         return
 
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(f"🗑 Да, удалить ({count} шт.)", callback_data="clearseen:confirm"),
-            InlineKeyboardButton("❌ Отмена", callback_data="clearseen:cancel"),
-        ]
-    ])
+    count = len(medium)
+    for n in medium:
+        digest_seen.add(n["uid"])
+
     await update.message.reply_text(
-        f"⚠️ Очистить бакет обработанных новостей?\n"
-        f"Сейчас в нём <b>{count}</b> записей.\n\n"
-        f"После очистки бот заново найдёт все текущие новости.",
+        f"✅ Отмечено <b>{count}</b> новостей как просмотренные.\n"
+        f"При следующем /digest они не появятся.",
         parse_mode=ParseMode.HTML,
-        reply_markup=keyboard,
     )
 
 
@@ -733,8 +727,8 @@ async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     today = date.today().isoformat()
     today_news = daily_news_cache.get(today, [])
 
-    # Фильтр: хайп от 3 до 7 (не попавшие в горячие, но не совсем мусор)
-    medium_news = [n for n in today_news if 3 <= n["hype_score"] <= 7]
+    # Фильтр: хайп от 3 до 7, исключая просмотренные
+    medium_news = [n for n in today_news if 3 <= n["hype_score"] <= 7 and n["uid"] not in digest_seen]
     medium_news.sort(key=lambda x: x["hype_score"], reverse=True)
 
     if not medium_news:
@@ -832,7 +826,7 @@ async def post_init(application: Application):
         BotCommand("check", "Проверить новости прямо сейчас"),
         BotCommand("digest", "Дайджест новостей (хайп 3-7) за сегодня"),
         BotCommand("status", "Статус бота"),
-        BotCommand("clear", "Очистить бакет новостей"),
+        BotCommand("clear", "Скрыть просмотренный дайджест"),
     ])
     logger.info("Меню команд установлено")
 
