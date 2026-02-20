@@ -60,6 +60,14 @@ def save_seen(seen: set[str]):
         json.dump(items, f)
 
 
+def clear_seen() -> int:
+    """Очистить список обработанных новостей. Возвращает кол-во удалённых."""
+    count = len(load_seen())
+    with open(SEEN_FILE, "w", encoding="utf-8") as f:
+        json.dump([], f)
+    return count
+
+
 def fetch_rss(source: dict) -> list[NewsItem]:
     """Парсить RSS-ленту источника."""
     items = []

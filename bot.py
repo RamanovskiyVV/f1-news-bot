@@ -35,7 +35,7 @@ from config import (
     HYPE_THRESHOLD,
     CHECK_INTERVAL_MINUTES,
 )
-from scraper import NewsItem, collect_new_news, fetch_article_content
+from scraper import NewsItem, collect_new_news, fetch_article_content, clear_seen, load_seen
 from analyzer import analyze_news_batch, generate_news_post, find_related_post
 from storage import (
     add_published,
@@ -321,6 +321,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _do_publish(query, uid, generated_posts[uid], msg_id, context)
         except (ValueError, KeyError) as e:
             await query.message.reply_text(f"❌ Ошибка: {e}")
+    elif action == "clearseen":
+        if uid == "confirm":
+            count = clear_seen()
+            await query.edit_message_text(f"✅ Бакет очищен — удалено {count} записей.")
+        else:
+            await query.edit_message_text("👌 Отменено.")
+        return
     elif action == "publishnow":
         # Публиковать без reply
         if uid in generated_posts:
@@ -695,6 +702,32 @@ def _save_to_daily_cache(items: list[NewsItem]):
     save_daily_cache(daily_news_cache)
 
 
+async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Очистить бакет обработанных новостей."""
+    chat_id = update.effective_chat.id
+    if owner_chat_id and chat_id != owner_chat_id:
+        return
+
+    count = len(load_seen())
+    if count == 0:
+        await update.message.reply_text("📭 Бакет уже пуст.")
+        return
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(f"🗑 Да, удалить ({count} шт.)", callback_data="clearseen:confirm"),
+            InlineKeyboardButton("❌ Отмена", callback_data="clearseen:cancel"),
+        ]
+    ])
+    await update.message.reply_text(
+        f"⚠️ Очистить бакет обработанных новостей?\n"
+        f"Сейчас в нём <b>{count}</b> записей.\n\n"
+        f"После очистки бот заново найдёт все текущие новости.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=keyboard,
+    )
+
+
 async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /digest — показать новости с хайпом 3-6 за сегодня."""
     today = date.today().isoformat()
@@ -799,6 +832,7 @@ async def post_init(application: Application):
         BotCommand("check", "Проверить новости прямо сейчас"),
         BotCommand("digest", "Дайджест новостей (хайп 3-7) за сегодня"),
         BotCommand("status", "Статус бота"),
+        BotCommand("clear", "Очистить бакет новостей"),
     ])
     logger.info("Меню команд установлено")
 
@@ -850,6 +884,7 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("check", cmd_check))
     app.add_handler(CommandHandler("digest", cmd_digest))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("clear", cmd_clear))
 
     # Inline-кнопки
     app.add_handler(CallbackQueryHandler(handle_callback))
