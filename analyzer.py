@@ -96,10 +96,27 @@ async def analyze_news_batch(news_items: list[NewsItem]) -> list[NewsItem]:
     return news_items
 
 
-async def generate_news_post(title: str, url: str, article_content: str) -> str:
+async def generate_news_post(
+    title: str,
+    url: str,
+    article_content: str,
+    previous_posts: list[str] | None = None,
+) -> str:
     """
     Сгенерировать пост для Telegram-канала на русском языке.
+    previous_posts — тексты последних постов канала для контекста стиля.
     """
+    context_block = ""
+    if previous_posts:
+        posts_text = "\n---\n".join(previous_posts[-7:])
+        context_block = f"""
+
+Вот последние посты канала — пиши в похожем стиле и тоне, не повторяй уже опубликованную информацию:
+---
+{posts_text}
+---
+"""
+
     prompt = f"""Ты — автор Telegram-канала о Формуле 1. Напиши короткий, яркий и информативный пост для Telegram-канала на РУССКОМ языке на основе этой новости.
 
 Требования:
@@ -110,9 +127,9 @@ async def generate_news_post(title: str, url: str, article_content: str) -> str:
 - Тон — живой, экспертный, увлекательный
 - Используй HTML-теги для форматирования: <b>жирный</b>, <i>курсив</i>
 - НЕ добавляй хэштеги
-- НЕ добавляй ссылку — она будет добавлена автоматически
+- НЕ добавляй ссылки
 - НЕ используй Markdown (звёздочки), только HTML-теги
-
+{context_block}
 Заголовок оригинала: {title}
 
 Текст статьи:
@@ -134,10 +151,74 @@ async def generate_news_post(title: str, url: str, article_content: str) -> str:
         import re
         post = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', post)
         post = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', post)
-        # Добавить ссылку на источник
-        post += f"\n\n🔗 Источник: {url}"
         return post
 
     except Exception as e:
         logger.error(f"Ошибка генерации поста: {e}")
-        return f"⚠️ Ошибка генерации поста. Попробуйте ещё раз.\n\nИсточник: {url}"
+        return f"⚠️ Ошибка генерации поста. Попробуйте ещё раз."
+
+
+async def find_related_post(
+    new_post_title: str,
+    new_post_text: str,
+    published_posts: list[dict],
+) -> Optional[str]:
+    """
+    Определить, есть ли среди опубликованных постов тематически связанный.
+    Возвращает uid связанного поста или None.
+    
+    published_posts — список dict с ключами: uid, title, text.
+    """
+    if not published_posts:
+        return None
+
+    # Формируем список постов для ChatGPT (только заголовки — экономия токенов)
+    posts_list = []
+    for i, p in enumerate(published_posts):
+        posts_list.append(f"{i}. {p.get('title', 'Без заголовка')}")
+
+    posts_text = "\n".join(posts_list)
+
+    prompt = f"""Ты помогаешь вести Telegram-канал о Формуле 1.
+
+Новый пост, который будет опубликован:
+Заголовок: {new_post_title}
+
+Вот список уже опубликованных постов канала:
+{posts_text}
+
+Есть ли среди опубликованных постов тематически связанный с новым? 
+Связанный — значит о ТОЙ ЖЕ теме, событии, персоне или команде (продолжение истории, обновление, развитие темы).
+НЕ считай связанным посты, которые просто о Формуле 1 в целом.
+
+Ответь строго в JSON:
+{{"related_index": <номер поста или null если нет связи>, "reason": "<краткое объяснение>"}}
+"""
+
+    try:
+        response = await client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": "Отвечай строго в JSON формате."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+
+        content = response.choices[0].message.content
+        result = json.loads(content)
+        related_index = result.get("related_index")
+        reason = result.get("reason", "")
+
+        if related_index is not None and 0 <= related_index < len(published_posts):
+            related = published_posts[related_index]
+            logger.info(f"Найден связанный пост [{related_index}]: {reason}")
+            return related.get("uid")
+        else:
+            logger.info(f"Связанных постов не найдено: {reason}")
+            return None
+
+    except Exception as e:
+        logger.error(f"Ошибка поиска связанного поста: {e}")
+        return None

@@ -36,7 +36,14 @@ from config import (
     CHECK_INTERVAL_MINUTES,
 )
 from scraper import NewsItem, collect_new_news, fetch_article_content
-from analyzer import analyze_news_batch, generate_news_post
+from analyzer import analyze_news_batch, generate_news_post, find_related_post
+from storage import (
+    add_published,
+    get_recent_posts,
+    get_recent_posts_for_context,
+    find_post_by_uid,
+    load_published,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +57,8 @@ editing_state: dict[int, str] = {}  # chat_id -> uid
 post_photos: dict[str, str] = {}
 # Состояние ожидания фото от пользователя (chat_id -> uid)
 photo_state: dict[int, str] = {}
+# Выбранный reply-target (uid новости -> channel_message_id)
+reply_targets: dict[str, int] = {}
 # Дневной кэш ВСЕХ проанализированных новостей (дата -> список dict)
 # Хранит новости за текущий день для команды /digest
 daily_news_cache: dict[str, list[dict]] = {}
@@ -124,7 +133,9 @@ def news_alert_keyboard(uid: str) -> InlineKeyboardMarkup:
 def generated_post_keyboard(uid: str) -> InlineKeyboardMarkup:
     """Клавиатура для сгенерированного поста."""
     has_photo = uid in post_photos
+    has_reply = uid in reply_targets
     photo_label = "🖼 Картинка ✅" if has_photo else "🖼 Картинка"
+    reply_label = "↩️ Reply ✅" if has_reply else "↩️ Reply"
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📤 Отправить в канал", callback_data=f"publish:{uid}"),
@@ -135,6 +146,7 @@ def generated_post_keyboard(uid: str) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(photo_label, callback_data=f"photo:{uid}"),
+            InlineKeyboardButton(reply_label, callback_data=f"replyselect:{uid}"),
         ],
     ])
 
@@ -240,7 +252,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     data = query.data
-    action, uid = data.split(":", 1)
+    parts = data.split(":", 2)  # макс. 3 части (action:uid:extra)
+    action = parts[0]
+    uid = parts[1] if len(parts) > 1 else ""
+    extra = parts[2] if len(parts) > 2 else ""
 
     if action == "generate":
         await handle_generate(query, uid)
@@ -252,6 +267,26 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_edit(query, uid, context)
     elif action == "photo":
         await handle_photo_request(query, uid, context)
+    elif action == "replyselect":
+        await handle_reply_select(query, uid)
+    elif action == "replypick":
+        await handle_reply_pick(query, uid)
+    elif action == "replyclear":
+        await handle_reply_clear(query, uid)
+    elif action == "confirmreply":
+        # extra = channel_message_id
+        try:
+            msg_id = int(extra)
+            reply_targets[uid] = msg_id
+            await _do_publish(query, uid, generated_posts[uid], msg_id, context)
+        except (ValueError, KeyError) as e:
+            await query.message.reply_text(f"❌ Ошибка: {e}")
+    elif action == "publishnow":
+        # Публиковать без reply
+        if uid in generated_posts:
+            await _do_publish(query, uid, generated_posts[uid], None, context)
+        else:
+            await query.message.reply_text("⚠️ Пост не найден.")
 
 
 async def handle_generate(query, uid: str, is_regen: bool = False):
@@ -272,11 +307,15 @@ async def handle_generate(query, uid: str, is_regen: bool = False):
         if not article_content:
             article_content = f"{news_data['title']}\n{news_data.get('summary', '')}"
 
+        # Загрузить последние посты канала для контекста
+        previous_posts = get_recent_posts_for_context(7)
+
         # Генерация через ChatGPT
         post = await generate_news_post(
             title=news_data["title"],
             url=news_data["url"],
             article_content=article_content,
+            previous_posts=previous_posts if previous_posts else None,
         )
 
         # Сохранить в кэш
@@ -301,24 +340,98 @@ async def handle_publish(query, uid: str, context: ContextTypes.DEFAULT_TYPE):
         return
 
     post = generated_posts[uid]
+    reply_msg_id = reply_targets.get(uid)  # None если не выбран reply
 
+    # Если reply не выбран вручную — попробовать найти автоматически
+    if reply_msg_id is None:
+        await query.message.reply_text("⏳ Проверяю связь с предыдущими постами...")
+        published = get_recent_posts(20)
+        if published:
+            news_data = news_cache.get(uid, {})
+            related_uid = await find_related_post(
+                new_post_title=news_data.get("title", ""),
+                new_post_text=post,
+                published_posts=published,
+            )
+            if related_uid:
+                related = find_post_by_uid(related_uid)
+                if related:
+                    # Предложить пользователю
+                    related_title = related.get("title", "Без заголовка")[:60]
+                    related_msg_id = related.get("channel_message_id")
+                    keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton(
+                            f"✅ Да, reply на «{related_title}»",
+                            callback_data=f"confirmreply:{uid}:{related_msg_id}",
+                        )],
+                        [InlineKeyboardButton(
+                            "❌ Нет, без reply",
+                            callback_data=f"publishnow:{uid}",
+                        )],
+                        [InlineKeyboardButton(
+                            "↩️ Выбрать другой пост",
+                            callback_data=f"replyselect:{uid}",
+                        )],
+                    ])
+                    await query.message.reply_text(
+                        f"🔗 Найден связанный пост:\n\n"
+                        f"<b>«{html.escape(related_title)}»</b>\n\n"
+                        f"Опубликовать как ответ на него?",
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=keyboard,
+                    )
+                    return
+
+    # Публикуем
+    await _do_publish(query, uid, post, reply_msg_id, context)
+
+
+async def _do_publish(
+    query,
+    uid: str,
+    post: str,
+    reply_msg_id: int | None,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    """Фактическая отправка поста в канал."""
     try:
+        send_kwargs = {}
+        if reply_msg_id:
+            send_kwargs["reply_to_message_id"] = reply_msg_id
+
         if uid in post_photos:
-            # Отправить как фото с подписью
-            await context.bot.send_photo(
+            msg = await context.bot.send_photo(
                 chat_id=TELEGRAM_CHANNEL_ID,
                 photo=post_photos[uid],
-                caption=post[:1024],  # Telegram ограничивает caption до 1024 символов
+                caption=post[:1024],
                 parse_mode=ParseMode.HTML,
+                **send_kwargs,
             )
         else:
-            await context.bot.send_message(
+            msg = await context.bot.send_message(
                 chat_id=TELEGRAM_CHANNEL_ID,
                 text=post,
                 parse_mode=ParseMode.HTML,
                 disable_web_page_preview=False,
+                **send_kwargs,
             )
-        await query.message.reply_text("✅ Пост успешно отправлен в канал!")
+
+        # Сохранить в историю опубликованных постов
+        news_data = news_cache.get(uid, {})
+        add_published(
+            uid=uid,
+            title=news_data.get("title", "Без заголовка"),
+            text=post,
+            channel_message_id=msg.message_id,
+        )
+
+        # Очистить reply-target
+        reply_targets.pop(uid, None)
+
+        reply_info = ""
+        if reply_msg_id:
+            reply_info = " (↩️ reply)"
+        await query.message.reply_text(f"✅ Пост успешно отправлен в канал!{reply_info}")
 
     except Exception as e:
         logger.error(f"Ошибка публикации: {e}", exc_info=True)
@@ -335,14 +448,11 @@ async def handle_edit(query, uid: str, context: ContextTypes.DEFAULT_TYPE):
     editing_state[chat_id] = uid
 
     await query.message.reply_text(
-        "✏️ <b>Режим редактирования</b>\n\n"
-        "Отправьте мне отредактированный текст поста.\n"
-        "Текущий пост скопирован ниже:\n\n"
-        "─────────────────\n"
-        f"{generated_posts[uid]}\n"
-        "─────────────────\n\n"
-        "Скопируйте, отредактируйте и отправьте мне новый вариант.\n"
-        "Или отправьте /cancel для отмены.",
+        "✏️ Скопируйте пост ниже, отредактируйте и отправьте мне.\n"
+        "/cancel — отмена",
+    )
+    await query.message.reply_text(
+        generated_posts[uid],
         parse_mode=ParseMode.HTML,
         disable_web_page_preview=True,
     )
@@ -369,6 +479,75 @@ async def handle_photo_request(query, uid: str, context: ContextTypes.DEFAULT_TY
         )
 
     photo_state[chat_id] = uid
+
+
+async def handle_reply_select(query, uid: str):
+    """Показать список последних постов для выбора reply."""
+    published = get_recent_posts(10)
+    if not published:
+        await query.message.reply_text("📭 Нет опубликованных постов для reply.")
+        return
+
+    buttons = []
+    for p in reversed(published):  # Новые сверху
+        title = p.get("title", "Без заголовка")[:45]
+        p_uid = p.get("uid", "")
+        msg_id = p.get("channel_message_id", 0)
+        # callback_data: replypick:news_uid:published_msg_id
+        buttons.append([InlineKeyboardButton(
+            f"📌 {title}",
+            callback_data=f"replypick:{uid}:{msg_id}",
+        )])
+
+    # Кнопка "Без reply"
+    buttons.append([InlineKeyboardButton(
+        "❌ Без reply",
+        callback_data=f"replyclear:{uid}",
+    )])
+
+    await query.message.reply_text(
+        "↩️ <b>Выберите пост для reply:</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+async def handle_reply_pick(query, uid: str):
+    """Обработка выбора конкретного поста для reply.
+    
+    uid в данном случае содержит news_uid, а extra (3-я часть) — msg_id.
+    Но из handle_callback extra уже разобрана — тут uid = 'news_uid' out of 'replypick:news_uid:msg_id'.
+    Нужно получить msg_id из callback_data напрямую.
+    """
+    # callback_data = "replypick:news_uid:channel_msg_id"
+    parts = query.data.split(":", 2)
+    if len(parts) < 3:
+        await query.message.reply_text("❌ Ошибка выбора.")
+        return
+
+    news_uid = parts[1]
+    try:
+        msg_id = int(parts[2])
+    except ValueError:
+        await query.message.reply_text("❌ Ошибка: некорректный ID поста.")
+        return
+
+    reply_targets[news_uid] = msg_id
+    await query.message.reply_text(
+        f"✅ Reply установлен! (msg_id: {msg_id})\n\n"
+        "Нажмите «📤 Отправить в канал» для публикации.",
+        reply_markup=generated_post_keyboard(news_uid),
+    )
+
+
+async def handle_reply_clear(query, uid: str):
+    """Очистить выбранный reply."""
+    reply_targets.pop(uid, None)
+    await query.message.reply_text(
+        "✅ Reply убран.\n\n"
+        "Нажмите «📤 Отправить в канал» для публикации.",
+        reply_markup=generated_post_keyboard(uid),
+    )
 
 
 async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
