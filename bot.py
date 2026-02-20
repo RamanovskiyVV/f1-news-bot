@@ -43,6 +43,8 @@ from storage import (
     get_recent_posts_for_context,
     find_post_by_uid,
     load_published,
+    load_daily_cache,
+    save_daily_cache,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,8 +62,8 @@ photo_state: dict[int, str] = {}
 # Выбранный reply-target (uid новости -> channel_message_id)
 reply_targets: dict[str, int] = {}
 # Дневной кэш ВСЕХ проанализированных новостей (дата -> список dict)
-# Хранит новости за текущий день для команды /digest
-daily_news_cache: dict[str, list[dict]] = {}
+# Хранит новости за текущий день для команды /digest, сохраняется в файл
+daily_news_cache: dict[str, list[dict]] = load_daily_cache()
 # Chat ID владельца — запоминается при первом /start
 # Сохраняется в файл для переживания рестартов
 OWNER_CHAT_ID_FILE = Path(__file__).parent / "owner_chat_id.json"
@@ -625,6 +627,9 @@ def _save_to_daily_cache(items: list[NewsItem]):
                 "hype_score": item.hype_score,
             })
             existing_uids.add(item.uid)
+
+    # Сохранить в файл
+    save_daily_cache(daily_news_cache)
 
 
 async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):

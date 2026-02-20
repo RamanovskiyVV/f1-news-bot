@@ -5,4 +5,5 @@ venv/
 seen_news.json
 owner_chat_id.json
 published_posts.json
+daily_cache.json
 bot.log

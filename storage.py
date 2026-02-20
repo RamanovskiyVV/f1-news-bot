@@ -92,3 +92,34 @@ def find_post_by_uid(uid: str) -> Optional[dict]:
         if p.get("uid") == uid:
             return p
     return None
+
+
+# --- Дневной кэш проанализированных новостей (для /digest) ---
+
+DAILY_CACHE_FILE = Path(__file__).parent / "daily_cache.json"
+
+
+def load_daily_cache() -> dict[str, list[dict]]:
+    """Загрузить дневной кэш. Удаляет записи за прошлые дни."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    if DAILY_CACHE_FILE.exists():
+        try:
+            data = json.loads(DAILY_CACHE_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                # Оставить только сегодня
+                if today in data:
+                    return {today: data[today]}
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"Ошибка чтения daily_cache.json: {e}")
+    return {}
+
+
+def save_daily_cache(cache: dict[str, list[dict]]) -> None:
+    """Сохранить дневной кэш в файл (только сегодня)."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    # Оставить только сегодня
+    to_save = {today: cache.get(today, [])}
+    DAILY_CACHE_FILE.write_text(
+        json.dumps(to_save, ensure_ascii=False),
+        encoding="utf-8",
+    )
