@@ -92,6 +92,9 @@ def _save_owner_chat_id(chat_id: int) -> None:
     OWNER_CHAT_ID_FILE.write_text(json.dumps({"owner_chat_id": chat_id}))
     logger.info(f"owner_chat_id сохранён в файл: {chat_id}")
 
+def _is_owner(chat_id: int) -> bool:
+    """Проверить, является ли пользователь владельцем бота."""
+    return owner_chat_id is not None and chat_id == owner_chat_id
 
 async def _cleanup_deleted_posts(bot) -> list[dict]:
     """Проверить, существуют ли посты в канале. Удалить удалённые. Вернуть живые."""
@@ -195,7 +198,14 @@ def generated_post_keyboard(uid: str) -> InlineKeyboardMarkup:
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start."""
     global owner_chat_id
-    owner_chat_id = update.message.chat_id
+    chat_id = update.message.chat_id
+
+    # Если owner уже задан и это не он — игнорировать
+    if owner_chat_id is not None and chat_id != owner_chat_id:
+        await update.message.reply_text("⛔ Этот бот приватный.")
+        return
+
+    owner_chat_id = chat_id
     _save_owner_chat_id(owner_chat_id)
     logger.info(f"Owner chat_id сохранён: {owner_chat_id}")
 
@@ -218,6 +228,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /status."""
+    if not _is_owner(update.effective_chat.id):
+        return
     await update.message.reply_text(
         f"✅ Бот работает\n"
         f"📊 Порог хайпа: {HYPE_THRESHOLD}/10\n"
@@ -229,6 +241,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Ручная проверка новостей по команде /check."""
+    if not _is_owner(update.effective_chat.id):
+        return
     msg = await update.message.reply_text("⏳ Собираю новости...")
     
     try:
@@ -290,6 +304,9 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка нажатий inline-кнопок."""
     query = update.callback_query
+    if not _is_owner(query.from_user.id):
+        await query.answer("⛔ Доступ запрещён", show_alert=True)
+        return
     await query.answer()
 
     data = query.data
@@ -620,6 +637,8 @@ async def handle_reply_clear(query, uid: str):
 async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка входящих фото (для прикрепления к посту)."""
     chat_id = update.message.chat_id
+    if not _is_owner(chat_id):
+        return
 
     if chat_id not in photo_state:
         return
@@ -643,6 +662,8 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка текстовых сообщений (для редактирования)."""
     chat_id = update.message.chat_id
+    if not _is_owner(chat_id):
+        return
 
     # Если ждём фото, но пришёл текст — отмена
     if chat_id in photo_state:
@@ -699,8 +720,7 @@ def _save_to_daily_cache(items: list[NewsItem]):
 
 async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Пометить все текущие дайджест-новости как просмотренные."""
-    chat_id = update.effective_chat.id
-    if owner_chat_id and chat_id != owner_chat_id:
+    if not _is_owner(update.effective_chat.id):
         return
 
     today = date.today().isoformat()
@@ -724,6 +744,8 @@ async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /digest — показать новости с хайпом 3-6 за сегодня."""
+    if not _is_owner(update.effective_chat.id):
+        return
     today = date.today().isoformat()
     today_news = daily_news_cache.get(today, [])
 
