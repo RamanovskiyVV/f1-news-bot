@@ -9,7 +9,7 @@ from typing import Optional
 
 from openai import AsyncOpenAI
 
-from config import OPENAI_API_KEY, OPENAI_MODEL
+from config import OPENAI_API_KEY, OPENAI_MODEL, OPENAI_MODEL_GENERATE
 from scraper import NewsItem
 
 logger = logging.getLogger(__name__)
@@ -138,7 +138,7 @@ async def generate_news_post(
 
     try:
         response = await client.chat.completions.create(
-            model=OPENAI_MODEL,
+            model=OPENAI_MODEL_GENERATE,
             messages=[
                 {"role": "system", "content": "Ты автор популярного Telegram-канала о Формуле 1. Пиши ярко и по делу."},
                 {"role": "user", "content": prompt}
