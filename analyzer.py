@@ -35,7 +35,8 @@ async def analyze_news_batch(news_items: list[NewsItem]) -> list[NewsItem]:
             "summary": item.summary[:300],
         })
 
-    prompt = f"""Ты — аналитик новостей Формулы 1. Проанализируй следующие новости и для каждой:
+    # Стабильная часть промпта (кешируется между вызовами)
+    instructions = """Ты — аналитик новостей Формулы 1. Проанализируй новости и для каждой:
 
 1. Поставь оценку "хайпа" по шкале от 1 до 10, где:
    - 10: Сенсация (смена пилота топ-команды, серьёзная авария, дисквалификация, скандал)
@@ -48,15 +49,16 @@ async def analyze_news_batch(news_items: list[NewsItem]) -> list[NewsItem]:
 
 Верни ответ строго в JSON формате — массив объектов:
 [
-  {{
+  {
     "index": 0,
     "hype_score": 8,
     "summary_ru": "Краткое описание на русском"
-  }},
+  },
   ...
-]
+]"""
 
-Новости для анализа:
+    # Меняющаяся часть (конкретные новости) — в конце для промпт-кеширования
+    news_data = f"""Новости для анализа:
 {json.dumps(news_list, ensure_ascii=False, indent=2)}
 """
 
@@ -65,7 +67,8 @@ async def analyze_news_batch(news_items: list[NewsItem]) -> list[NewsItem]:
             model=OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": "Ты аналитик Формулы 1. Отвечай строго в JSON формате."},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": instructions},
+                {"role": "user", "content": news_data},
             ],
             temperature=0.3,
             response_format={"type": "json_object"},
@@ -106,18 +109,8 @@ async def generate_news_post(
     Сгенерировать пост для Telegram-канала на русском языке.
     previous_posts — тексты последних постов канала для контекста стиля.
     """
-    context_block = ""
-    if previous_posts:
-        posts_text = "\n---\n".join(previous_posts[-7:])
-        context_block = f"""
-
-Вот последние посты канала — пиши в похожем стиле и тоне, не повторяй уже опубликованную информацию:
----
-{posts_text}
----
-"""
-
-    prompt = f"""Ты — автор Telegram-канала о Формуле 1. Напиши короткий, яркий и информативный пост для Telegram-канала на РУССКОМ языке на основе этой новости.
+    # Стабильная часть (кешируется между вызовами)
+    instructions = """Напиши короткий, яркий и информативный пост для Telegram-канала на РУССКОМ языке на основе новости.
 
 Требования:
 - Пост должен быть коротким (3-6 предложений)
@@ -128,21 +121,33 @@ async def generate_news_post(
 - Используй HTML-теги для форматирования: <b>жирный</b>, <i>курсив</i>
 - НЕ добавляй хэштеги
 - НЕ добавляй ссылки
-- НЕ используй Markdown (звёздочки), только HTML-теги
-{context_block}
-Заголовок оригинала: {title}
+- НЕ используй Markdown (звёздочки), только HTML-теги"""
 
-Текст статьи:
-{article_content[:3000]}
-"""
+    # Контекст предыдущих постов (меняется редко — хорошо кешируется)
+    context_msg = None
+    if previous_posts:
+        posts_text = "\n---\n".join(previous_posts[-7:])
+        context_msg = (
+            "Вот последние посты канала — пиши в похожем стиле и тоне, "
+            "не повторяй уже опубликованную информацию:\n---\n"
+            f"{posts_text}\n---"
+        )
+
+    # Меняющаяся часть (конкретная статья) — в конце для промпт-кеширования
+    article_msg = f"Заголовок оригинала: {title}\n\nТекст статьи:\n{article_content[:3000]}"
+
+    messages = [
+        {"role": "system", "content": "Ты автор популярного Telegram-канала о Формуле 1. Пиши ярко и по делу."},
+        {"role": "user", "content": instructions},
+    ]
+    if context_msg:
+        messages.append({"role": "user", "content": context_msg})
+    messages.append({"role": "user", "content": article_msg})
 
     try:
         response = await client.chat.completions.create(
             model=OPENAI_MODEL_GENERATE,
-            messages=[
-                {"role": "system", "content": "Ты автор популярного Telegram-канала о Формуле 1. Пиши ярко и по делу."},
-                {"role": "user", "content": prompt}
-            ],
+            messages=messages,
             temperature=0.7,
         )
 
@@ -179,28 +184,30 @@ async def find_related_post(
 
     posts_text = "\n".join(posts_list)
 
-    prompt = f"""Ты помогаешь вести Telegram-канал о Формуле 1.
+    # Стабильная часть (кешируется)
+    instructions = """Ты помогаешь вести Telegram-канал о Формуле 1.
 
-Новый пост, который будет опубликован:
-Заголовок: {new_post_title}
-
-Вот список уже опубликованных постов канала:
-{posts_text}
-
-Есть ли среди опубликованных постов тематически связанный с новым? 
+Определи, есть ли среди опубликованных постов тематически связанный с новым.
 Связанный — значит о ТОЙ ЖЕ теме, событии, персоне или команде (продолжение истории, обновление, развитие темы).
 НЕ считай связанным посты, которые просто о Формуле 1 в целом.
 
 Ответь строго в JSON:
-{{"related_index": <номер поста или null если нет связи>, "reason": "<краткое объяснение>"}}
-"""
+{"related_index": <номер поста или null если нет связи>, "reason": "<краткое объяснение>"}"""
+
+    # Список постов (меняется редко — хорошо кешируется)
+    posts_msg = f"Список опубликованных постов канала:\n{posts_text}"
+
+    # Меняющаяся часть — в конце
+    new_msg = f"Новый пост, который будет опубликован:\nЗаголовок: {new_post_title}"
 
     try:
         response = await client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": "Отвечай строго в JSON формате."},
-                {"role": "user", "content": prompt},
+                {"role": "user", "content": instructions},
+                {"role": "user", "content": posts_msg},
+                {"role": "user", "content": new_msg},
             ],
             temperature=0.1,
             response_format={"type": "json_object"},
