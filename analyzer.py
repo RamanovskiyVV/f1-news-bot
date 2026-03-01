@@ -5,6 +5,7 @@
 
 import json
 import logging
+import re
 from typing import Optional
 
 from openai import AsyncOpenAI
@@ -15,6 +16,55 @@ from scraper import NewsItem
 logger = logging.getLogger(__name__)
 
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+# Telegram поддерживает только эти HTML-теги
+_ALLOWED_TAGS = {"b", "i", "u", "s", "a", "code", "pre", "tg-spoiler", "blockquote"}
+
+
+def _fix_html_tags(text: str) -> str:
+    """Исправить невалидный HTML для Telegram: убрать неизвестные теги,
+    починить перекрёстные и незакрытые теги."""
+    # Удалить теги, которые Telegram не поддерживает (кроме разрешённых)
+    text = re.sub(
+        r'</?(?!' + '|'.join(_ALLOWED_TAGS) + r')(\w+)[^>]*>',
+        '',
+        text,
+    )
+    # Починить перекрёстные теги: перестроить стек открытых тегов
+    stack = []
+    result = []
+    pos = 0
+    tag_re = re.compile(r'<(/?)([a-z]+)(?:\s[^>]*)?>',  re.IGNORECASE)
+    for m in tag_re.finditer(text):
+        result.append(text[pos:m.start()])
+        pos = m.end()
+        is_close = m.group(1) == '/'
+        tag = m.group(2).lower()
+        if tag not in _ALLOWED_TAGS:
+            continue
+        if not is_close:
+            stack.append(tag)
+            result.append(m.group(0))
+        else:
+            if tag in stack:
+                # Закрыть все теги до нужного (fix overlapping)
+                to_reopen = []
+                while stack and stack[-1] != tag:
+                    t = stack.pop()
+                    result.append(f"</{t}>")
+                    to_reopen.append(t)
+                if stack:
+                    stack.pop()
+                    result.append(f"</{tag}>")
+                for t in reversed(to_reopen):
+                    stack.append(t)
+                    result.append(f"<{t}>")
+            # Если тега нет в стеке — пропускаем закрывающий
+    result.append(text[pos:])
+    # Закрыть оставшиеся незакрытые теги
+    while stack:
+        result.append(f"</{stack.pop()}>")
+    return ''.join(result)
 
 
 async def analyze_news_batch(news_items: list[NewsItem]) -> list[NewsItem]:
@@ -153,9 +203,10 @@ async def generate_news_post(
 
         post = response.choices[0].message.content.strip()
         # Конвертировать Markdown в HTML если ChatGPT всё же использовал звёздочки
-        import re
         post = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', post)
         post = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', post)
+        # Исправить перекрёстные/невалидные HTML-теги
+        post = _fix_html_tags(post)
         return post
 
     except Exception as e:
