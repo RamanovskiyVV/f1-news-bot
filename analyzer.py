@@ -205,6 +205,8 @@ async def generate_news_post(
         # Конвертировать Markdown в HTML если ChatGPT всё же использовал звёздочки
         post = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', post)
         post = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', post)
+        # Заменить длинное тире на короткий дефис
+        post = post.replace('—', '-').replace('–', '-')
         # Исправить перекрёстные/невалидные HTML-теги
         post = _fix_html_tags(post)
         return post
