@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import urlparse, urlunparse
 
 import feedparser
 import httpx
@@ -36,28 +37,33 @@ class NewsItem:
 
     def __post_init__(self):
         if not self.uid:
-            self.uid = hashlib.md5(self.url.encode()).hexdigest()
+            self.uid = hashlib.md5(_normalize_url(self.url).encode()).hexdigest()
 
 
-def load_seen() -> set[str]:
-    """Загрузить список уже обработанных новостей."""
+def _normalize_url(url: str) -> str:
+    """Убрать query-параметры и фрагмент из URL для стабильного хэширования."""
+    parsed = urlparse(url)
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path.rstrip('/'), '', '', ''))
+
+
+def load_seen() -> list[str]:
+    """Загрузить упорядоченный список уже обработанных UID-ов."""
     if os.path.exists(SEEN_FILE):
         try:
             with open(SEEN_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return set(data)
+                return list(data)
         except Exception:
-            return set()
-    return set()
+            return []
+    return []
 
 
-def save_seen(seen: set[str]):
-    """Сохранить список обработанных новостей (макс. 1000 последних)."""
-    items = list(seen)
-    if len(items) > 1000:
-        items = items[-1000:]
+def save_seen(seen_list: list[str]):
+    """Сохранить список обработанных новостей (макс. 1000 последних, FIFO)."""
+    if len(seen_list) > 1000:
+        seen_list = seen_list[-1000:]
     with open(SEEN_FILE, "w", encoding="utf-8") as f:
-        json.dump(items, f)
+        json.dump(seen_list, f)
 
 
 def clear_seen() -> int:
@@ -66,6 +72,11 @@ def clear_seen() -> int:
     with open(SEEN_FILE, "w", encoding="utf-8") as f:
         json.dump([], f)
     return count
+
+
+def _seen_set() -> set[str]:
+    """Быстрый set для проверки (не для сохранения)."""
+    return set(load_seen())
 
 
 def fetch_rss(source: dict) -> list[NewsItem]:
@@ -147,20 +158,23 @@ def collect_new_news() -> list[NewsItem]:
     """
     Собрать новые (ещё не обработанные) новости из всех источников.
     """
-    seen = load_seen()
+    seen_list = load_seen()
+    seen_set = set(seen_list)
     all_news: list[NewsItem] = []
 
     for source in F1_SOURCES:
         logger.info(f"Парсинг {source['name']}...")
         items = fetch_rss(source)
-        new_items = [item for item in items if item.uid not in seen]
+        new_items = [item for item in items if item.uid not in seen_set]
         all_news.extend(new_items)
         logger.info(f"  Найдено {len(items)} новостей, новых: {len(new_items)}")
 
-    # Отметить все как просмотренные
+    # Отметить все как просмотренные (добавляем в конец — FIFO)
     for item in all_news:
-        seen.add(item.uid)
-    save_seen(seen)
+        if item.uid not in seen_set:
+            seen_list.append(item.uid)
+            seen_set.add(item.uid)
+    save_seen(seen_list)
 
     logger.info(f"Всего новых новостей: {len(all_news)}")
     return all_news
