@@ -36,7 +36,7 @@ from config import (
     CHECK_INTERVAL_MINUTES,
 )
 from scraper import NewsItem, collect_new_news, fetch_article_content
-from analyzer import analyze_news_batch, generate_news_post, find_related_post
+from analyzer import analyze_news_batch, generate_news_post, find_related_post, deduplicate_news
 from storage import (
     add_published,
     get_recent_posts,
@@ -64,6 +64,9 @@ photo_state: dict[int, str] = {}
 reply_targets: dict[str, int] = {}
 # Просмотренные через /digest uid (чистятся через /clear)
 digest_seen: set[str] = set()
+# Саммари уже отправленных сегодня горячих алертов (для дедупа по теме)
+_sent_topics: list[str] = []
+_sent_topics_date: str = ""
 # Дневной кэш ВСЕХ проанализированных новостей (дата -> список dict)
 # Хранит новости за текущий день для команды /digest, сохраняется в файл
 daily_news_cache: dict[str, list[dict]] = load_daily_cache()
@@ -279,6 +282,15 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔥 Горячих новостей: {len(hot_news)}"
         )
 
+        # Дедупликация по теме
+        hot_news = await _dedup_hot_news(hot_news)
+        if not hot_news:
+            await msg.edit_text(
+                f"📊 Проанализировано {len(analyzed)} новостей.\n"
+                f"Все горячие новости — дубликаты уже отправленных тем."
+            )
+            return
+
         # Отправить каждую горячую новость
         for item in hot_news:
             news_cache[item.uid] = {
@@ -294,6 +306,7 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=news_alert_keyboard(item.uid),
                 disable_web_page_preview=True,
             )
+            _track_sent_topic(item.summary)
             await asyncio.sleep(0.5)  # Не спамить
 
     except Exception as e:
@@ -690,6 +703,28 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
 
+def _track_sent_topic(summary: str):
+    """Запомнить саммари отправленного алерта для дедупликации по теме."""
+    global _sent_topics, _sent_topics_date
+    today = date.today().isoformat()
+    if _sent_topics_date != today:
+        _sent_topics.clear()
+        _sent_topics_date = today
+    _sent_topics.append(summary)
+
+
+async def _dedup_hot_news(hot_news: list[NewsItem]) -> list[NewsItem]:
+    """Убрать из горячих новостей дубликаты уже отправленных тем."""
+    global _sent_topics, _sent_topics_date
+    today = date.today().isoformat()
+    if _sent_topics_date != today:
+        _sent_topics.clear()
+        _sent_topics_date = today
+    if _sent_topics:
+        hot_news = await deduplicate_news(hot_news, _sent_topics)
+    return hot_news
+
+
 def _save_to_daily_cache(items: list[NewsItem]):
     """Сохранить все проанализированные новости в дневной кэш."""
     today = date.today().isoformat()
@@ -818,6 +853,12 @@ async def scheduled_check(context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"Проанализировано {len(analyzed)} новостей, горячих нет.")
             return
 
+        # Дедупликация по теме — убрать новости на ту же тему, что уже отправлялись
+        hot_news = await _dedup_hot_news(hot_news)
+        if not hot_news:
+            logger.info("Все горячие новости отфильтрованы как дубликаты тем.")
+            return
+
         logger.info(f"Найдено {len(hot_news)} горячих новостей!")
 
         for item in hot_news:
@@ -835,6 +876,7 @@ async def scheduled_check(context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=news_alert_keyboard(item.uid),
                 disable_web_page_preview=True,
             )
+            _track_sent_topic(item.summary)
             await asyncio.sleep(0.5)
 
     except Exception as e:

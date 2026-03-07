@@ -216,6 +216,71 @@ async def generate_news_post(
         return f"⚠️ Ошибка генерации поста. Попробуйте ещё раз."
 
 
+async def deduplicate_news(
+    hot_news: list[NewsItem],
+    already_sent: list[str],
+) -> list[NewsItem]:
+    """
+    Отфильтровать горячие новости, убрав дубликаты по теме.
+    already_sent — список заголовков/саммари уже отправленных сегодня алертов.
+    Возвращает только новости с уникальными темами.
+    """
+    if not already_sent or not hot_news:
+        return hot_news
+
+    sent_text = "\n".join(f"- {s}" for s in already_sent)
+    candidates = []
+    for i, item in enumerate(hot_news):
+        candidates.append(f"{i}. [{item.source}] {item.summary}")
+    candidates_text = "\n".join(candidates)
+
+    instructions = """Ты — модератор Telegram-канала о Формуле 1.
+
+Тебе даны:
+1. СПИСОК УЖЕ ОТПРАВЛЕННЫХ ТЕМ — новости, которые уже были отправлены пользователю сегодня.
+2. КАНДИДАТЫ — новые горячие новости, которые мы хотим отправить.
+
+Твоя задача: определить, какие из КАНДИДАТОВ являются ДУБЛИКАТАМИ уже отправленных тем.
+Дубликат — это новость о ТОМ ЖЕ САМОМ событии, факте, или ситуации, даже если она из другого источника
+или сформулирована иначе. Например:
+- «Russell takes pole in Australia» и «Mercedes 1-2 in qualifying» — дубликаты (об одном квалификации)
+- «Verstappen unhappy with 2026 cars» и «Max feeling empty about new regs» — дубликаты
+
+НЕ считай дубликатом новости, которые просто о том же пилоте/команде, но о РАЗНЫХ событиях.
+
+Ответь строго в JSON:
+{"keep_indices": [<список индексов кандидатов, которые НЕ являются дубликатами>]}"""
+
+    sent_msg = f"УЖЕ ОТПРАВЛЕННЫЕ ТЕМЫ:\n{sent_text}"
+    candidates_msg = f"КАНДИДАТЫ:\n{candidates_text}"
+
+    try:
+        response = await client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": "Отвечай строго в JSON формате."},
+                {"role": "user", "content": instructions},
+                {"role": "user", "content": sent_msg},
+                {"role": "user", "content": candidates_msg},
+            ],
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+
+        content = response.choices[0].message.content
+        result = json.loads(content)
+        keep = result.get("keep_indices", list(range(len(hot_news))))
+        filtered = [hot_news[i] for i in keep if 0 <= i < len(hot_news)]
+        dropped = len(hot_news) - len(filtered)
+        if dropped:
+            logger.info(f"Дедупликация тем: убрано {dropped} дубликатов из {len(hot_news)}")
+        return filtered
+
+    except Exception as e:
+        logger.error(f"Ошибка дедупликации тем: {e}")
+        return hot_news
+
+
 async def find_related_post(
     new_post_title: str,
     new_post_text: str,
