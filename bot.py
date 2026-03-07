@@ -8,6 +8,7 @@ import html
 import json
 import logging
 import os
+import re
 from datetime import date
 from pathlib import Path
 from typing import Optional
@@ -36,12 +37,11 @@ from config import (
     CHECK_INTERVAL_MINUTES,
 )
 from scraper import NewsItem, collect_new_news, fetch_article_content
-from analyzer import analyze_news_batch, generate_news_post, find_related_post, deduplicate_news
+from analyzer import analyze_news_batch, generate_news_post, deduplicate_news
 from storage import (
     add_published,
     get_recent_posts,
     get_recent_posts_for_context,
-    find_post_by_uid,
     load_published,
     load_daily_cache,
     save_daily_cache,
@@ -345,20 +345,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_reply_pick(query, uid)
     elif action == "replyclear":
         await handle_reply_clear(query, uid)
-    elif action == "confirmreply":
-        # extra = channel_message_id
-        try:
-            msg_id = int(extra)
-            reply_targets[uid] = msg_id
-            await _do_publish(query, uid, generated_posts[uid], msg_id, context)
-        except (ValueError, KeyError) as e:
-            await query.message.reply_text(f"❌ Ошибка: {e}")
-    elif action == "publishnow":
-        # Публиковать без reply
-        if uid in generated_posts:
-            await _do_publish(query, uid, generated_posts[uid], None, context)
-        else:
-            await query.message.reply_text("⚠️ Пост не найден.")
 
 
 async def handle_generate(query, uid: str, is_regen: bool = False):
@@ -414,46 +400,6 @@ async def handle_publish(query, uid: str, context: ContextTypes.DEFAULT_TYPE):
     post = generated_posts[uid]
     reply_msg_id = reply_targets.get(uid)  # None если не выбран reply
 
-    # Если reply не выбран вручную — попробовать найти автоматически
-    if reply_msg_id is None:
-        await query.message.reply_text("⏳ Проверяю связь с предыдущими постами...")
-        published = await _cleanup_deleted_posts(context.bot)
-        if published:
-            news_data = news_cache.get(uid, {})
-            related_uid = await find_related_post(
-                new_post_title=news_data.get("title", ""),
-                new_post_text=post,
-                published_posts=published,
-            )
-            if related_uid:
-                related = find_post_by_uid(related_uid)
-                if related:
-                    # Предложить пользователю
-                    related_title = related.get("title", "Без заголовка")[:60]
-                    related_msg_id = related.get("channel_message_id")
-                    keyboard = InlineKeyboardMarkup([
-                        [InlineKeyboardButton(
-                            f"✅ Да, reply на «{related_title}»",
-                            callback_data=f"confirmreply:{uid}:{related_msg_id}",
-                        )],
-                        [InlineKeyboardButton(
-                            "❌ Нет, без reply",
-                            callback_data=f"publishnow:{uid}",
-                        )],
-                        [InlineKeyboardButton(
-                            "↩️ Выбрать другой пост",
-                            callback_data=f"replyselect:{uid}",
-                        )],
-                    ])
-                    await query.message.reply_text(
-                        f"🔗 Найден связанный пост:\n\n"
-                        f"<b>«{html.escape(related_title)}»</b>\n\n"
-                        f"Опубликовать как ответ на него?",
-                        parse_mode=ParseMode.HTML,
-                        reply_markup=keyboard,
-                    )
-                    return
-
     # Публикуем
     await _do_publish(query, uid, post, reply_msg_id, context)
 
@@ -488,11 +434,14 @@ async def _do_publish(
                 **send_kwargs,
             )
 
+        # Извлечь заголовок из текста поста (первая строка, без HTML-тегов)
+        first_line = post.split("\n")[0][:80]
+        post_title = re.sub(r"<[^>]+>", "", first_line).strip() or "Без заголовка"
+
         # Сохранить в историю опубликованных постов
-        news_data = news_cache.get(uid, {})
         add_published(
             uid=uid,
-            title=news_data.get("title", "Без заголовка"),
+            title=post_title,
             text=post,
             channel_message_id=msg.message_id,
         )
