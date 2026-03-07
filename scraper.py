@@ -59,9 +59,9 @@ def load_seen() -> list[str]:
 
 
 def save_seen(seen_list: list[str]):
-    """Сохранить список обработанных новостей (макс. 1000 последних, FIFO)."""
-    if len(seen_list) > 1000:
-        seen_list = seen_list[-1000:]
+    """Сохранить список обработанных новостей (макс. 2000 последних, FIFO)."""
+    if len(seen_list) > 2000:
+        seen_list = seen_list[-2000:]
     with open(SEEN_FILE, "w", encoding="utf-8") as f:
         json.dump(seen_list, f)
 
