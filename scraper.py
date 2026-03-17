@@ -16,7 +16,7 @@ import feedparser
 import httpx
 from bs4 import BeautifulSoup
 
-from config import F1_SOURCES
+from config import F1_SOURCES, F1_TWITTER_SOURCES, NITTER_INSTANCE
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +88,7 @@ def fetch_rss(source: dict) -> list[NewsItem]:
         }
         response = httpx.get(source["rss"], headers=headers, timeout=15, follow_redirects=True)
         feed = feedparser.parse(response.text)
+        is_twitter = source.get("type") == "twitter"
 
         for entry in feed.entries[:15]:  # Последние 15 записей
             title = entry.get("title", "").strip()
@@ -100,7 +101,24 @@ def fetch_rss(source: dict) -> list[NewsItem]:
                 soup = BeautifulSoup(summary, "html.parser")
                 summary = soup.get_text(separator=" ", strip=True)
 
-            if title and link:
+            if is_twitter:
+                # Для твитов: title = имя автора, summary = текст твита
+                tweet_text = summary or title
+                if not tweet_text:
+                    continue
+                # Пропустить ретвиты (RT @)
+                if tweet_text.startswith("RT @"):
+                    continue
+                # Заменить nitter-ссылки на twitter
+                link = link.replace(NITTER_INSTANCE, "https://x.com")
+                items.append(NewsItem(
+                    title=tweet_text[:200],
+                    url=link,
+                    source=source["name"],
+                    summary=tweet_text[:500],
+                    published=published,
+                ))
+            elif title and link:
                 items.append(NewsItem(
                     title=title,
                     url=link,
@@ -162,12 +180,26 @@ def collect_new_news() -> list[NewsItem]:
     seen_set = set(seen_list)
     all_news: list[NewsItem] = []
 
+    # RSS-источники
     for source in F1_SOURCES:
         logger.info(f"Парсинг {source['name']}...")
         items = fetch_rss(source)
         new_items = [item for item in items if item.uid not in seen_set]
         all_news.extend(new_items)
         logger.info(f"  Найдено {len(items)} новостей, новых: {len(new_items)}")
+
+    # Twitter-инсайдеры (через Nitter RSS)
+    for tw in F1_TWITTER_SOURCES:
+        tw_source = {
+            "name": tw["name"],
+            "rss": f"{NITTER_INSTANCE}/{tw['handle']}/rss",
+            "type": "twitter",
+        }
+        logger.info(f"Парсинг {tw['name']} (@{tw['handle']})...")
+        items = fetch_rss(tw_source)
+        new_items = [item for item in items if item.uid not in seen_set]
+        all_news.extend(new_items)
+        logger.info(f"  Найдено {len(items)} твитов, новых: {len(new_items)}")
 
     # Отметить все как просмотренные (добавляем в конец — FIFO)
     for item in all_news:

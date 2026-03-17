@@ -67,3 +67,30 @@ F1_SOURCES = [
         "type": "rss",
     },
 ]
+
+# Nitter инстанс для Twitter-мониторинга
+NITTER_INSTANCE = os.getenv("NITTER_INSTANCE", "https://nitter.net")
+
+# Twitter-инсайдеры F1 (через Nitter RSS)
+F1_TWITTER_SOURCES = [
+    {
+        "name": "🐦 Chris Medland",
+        "handle": "ChrisMedlandF1",
+        "type": "twitter",
+    },
+    {
+        "name": "🐦 Albert Fabrega",
+        "handle": "AlbertFabrega",
+        "type": "twitter",
+    },
+    {
+        "name": "🐦 Andrew Benson",
+        "handle": "andrewbensonf1",
+        "type": "twitter",
+    },
+    {
+        "name": "🐦 Adam Cooper",
+        "handle": "adamcooperF1",
+        "type": "twitter",
+    },
+]
