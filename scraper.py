@@ -16,7 +16,7 @@ import feedparser
 import httpx
 from bs4 import BeautifulSoup
 
-from config import F1_SOURCES, F1_TWITTER_SOURCES, NITTER_INSTANCE
+from config import F1_SOURCES, F1_BLUESKY_SOURCES
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +88,6 @@ def fetch_rss(source: dict) -> list[NewsItem]:
         }
         response = httpx.get(source["rss"], headers=headers, timeout=15, follow_redirects=True)
         feed = feedparser.parse(response.text)
-        is_twitter = source.get("type") == "twitter"
 
         for entry in feed.entries[:15]:  # Последние 15 записей
             title = entry.get("title", "").strip()
@@ -101,24 +100,7 @@ def fetch_rss(source: dict) -> list[NewsItem]:
                 soup = BeautifulSoup(summary, "html.parser")
                 summary = soup.get_text(separator=" ", strip=True)
 
-            if is_twitter:
-                # Для твитов: title = имя автора, summary = текст твита
-                tweet_text = summary or title
-                if not tweet_text:
-                    continue
-                # Пропустить ретвиты (RT @)
-                if tweet_text.startswith("RT @"):
-                    continue
-                # Заменить nitter-ссылки на twitter
-                link = link.replace(NITTER_INSTANCE, "https://x.com")
-                items.append(NewsItem(
-                    title=tweet_text[:200],
-                    url=link,
-                    source=source["name"],
-                    summary=tweet_text[:500],
-                    published=published,
-                ))
-            elif title and link:
+            if title and link:
                 items.append(NewsItem(
                     title=title,
                     url=link,
@@ -129,6 +111,52 @@ def fetch_rss(source: dict) -> list[NewsItem]:
 
     except Exception as e:
         logger.warning(f"Ошибка при парсинге RSS {source['name']}: {e}")
+
+    return items
+
+
+def fetch_bluesky(handle: str, name: str) -> list[NewsItem]:
+    """Получить последние посты из Bluesky через публичный API."""
+    items = []
+    try:
+        url = (
+            f"https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed"
+            f"?actor={handle}&limit=15&filter=posts_no_replies"
+        )
+        response = httpx.get(url, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+
+        for entry in data.get("feed", []):
+            post = entry.get("post", {})
+            record = post.get("record", {})
+            text = record.get("text", "").strip()
+            if not text:
+                continue
+
+            # Пропустить репосты
+            reason = entry.get("reason")
+            if reason and reason.get("$type") == "app.bsky.feed.defs#reasonRepost":
+                continue
+
+            # Сформировать ссылку на пост
+            uri = post.get("uri", "")
+            parts = uri.split("/")
+            post_id = parts[-1] if parts else ""
+            post_url = f"https://bsky.app/profile/{handle}/post/{post_id}"
+
+            created = record.get("createdAt", "")
+
+            items.append(NewsItem(
+                title=text[:200],
+                url=post_url,
+                source=name,
+                summary=text[:500],
+                published=created,
+            ))
+
+    except Exception as e:
+        logger.warning(f"Ошибка при парсинге Bluesky {name}: {e}")
 
     return items
 
@@ -188,18 +216,13 @@ def collect_new_news() -> list[NewsItem]:
         all_news.extend(new_items)
         logger.info(f"  Найдено {len(items)} новостей, новых: {len(new_items)}")
 
-    # Twitter-инсайдеры (через Nitter RSS)
-    for tw in F1_TWITTER_SOURCES:
-        tw_source = {
-            "name": tw["name"],
-            "rss": f"{NITTER_INSTANCE}/{tw['handle']}/rss",
-            "type": "twitter",
-        }
-        logger.info(f"Парсинг {tw['name']} (@{tw['handle']})...")
-        items = fetch_rss(tw_source)
+    # Bluesky-инсайдеры (бесплатный публичный API)
+    for bsky in F1_BLUESKY_SOURCES:
+        logger.info(f"Парсинг {bsky['name']} (@{bsky['handle']})...")
+        items = fetch_bluesky(bsky["handle"], bsky["name"])
         new_items = [item for item in items if item.uid not in seen_set]
         all_news.extend(new_items)
-        logger.info(f"  Найдено {len(items)} твитов, новых: {len(new_items)}")
+        logger.info(f"  Найдено {len(items)} постов, новых: {len(new_items)}")
 
     # Отметить все как просмотренные (добавляем в конец — FIFO)
     for item in all_news:

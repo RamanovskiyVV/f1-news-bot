@@ -68,29 +68,22 @@ F1_SOURCES = [
     },
 ]
 
-# Nitter инстанс для Twitter-мониторинга
-NITTER_INSTANCE = os.getenv("NITTER_INSTANCE", "https://nitter.net")
-
-# Twitter-инсайдеры F1 (через Nitter RSS)
-F1_TWITTER_SOURCES = [
+# Bluesky-инсайдеры F1 (бесплатный публичный API)
+F1_BLUESKY_SOURCES = [
     {
-        "name": "🐦 Chris Medland",
-        "handle": "ChrisMedlandF1",
-        "type": "twitter",
+        "name": "🦋 Chris Medland",
+        "handle": "chrismedlandf1.bsky.social",
     },
     {
-        "name": "🐦 Albert Fabrega",
-        "handle": "AlbertFabrega",
-        "type": "twitter",
+        "name": "🦋 Albert Fabrega",
+        "handle": "albertfabrega.bsky.social",
     },
     {
-        "name": "🐦 Andrew Benson",
-        "handle": "andrewbensonf1",
-        "type": "twitter",
+        "name": "🦋 Andrew Benson",
+        "handle": "andrewbensonf1.bsky.social",
     },
     {
-        "name": "🐦 Adam Cooper",
-        "handle": "adamcooperF1",
-        "type": "twitter",
+        "name": "🦋 Adam Cooper",
+        "handle": "adamcooperf1.bsky.social",
     },
 ]
