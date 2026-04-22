@@ -21,6 +21,8 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID", "")
 
 # Мемы (Reddit)
+REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID", "")
+REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET", "")
 MEME_MIN_SCORE = int(os.getenv("MEME_MIN_SCORE", "100"))
 MEME_HOT_SCORE = int(os.getenv("MEME_HOT_SCORE", "500"))
 MEME_CHECK_INTERVAL_MINUTES = int(os.getenv("MEME_CHECK_INTERVAL_MINUTES", "30"))

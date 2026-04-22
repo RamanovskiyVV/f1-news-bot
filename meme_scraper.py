@@ -1,6 +1,6 @@
 """
 Модуль для парсинга мемов из Reddit (r/formuladank и др.).
-Использует публичный JSON API Reddit (без авторизации).
+Использует Reddit OAuth2 API (бесплатно, 60 запросов/мин).
 """
 
 import hashlib
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import httpx
 
-from config import MEME_MIN_SCORE, MEME_MAX_AGE_HOURS
+from config import MEME_MIN_SCORE, MEME_MAX_AGE_HOURS, REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +95,38 @@ def clear_seen_memes() -> int:
     return count
 
 
+# ─── Reddit OAuth ─────────────────────────────────────────────────────
+
+_reddit_token: str = ""
+_reddit_token_expires: float = 0
+
+
+def _get_reddit_token() -> str:
+    """Получить OAuth-токен Reddit (кэшируется на ~1 час)."""
+    global _reddit_token, _reddit_token_expires
+
+    if _reddit_token and time.time() < _reddit_token_expires:
+        return _reddit_token
+
+    if not REDDIT_CLIENT_ID or not REDDIT_CLIENT_SECRET:
+        raise ValueError("REDDIT_CLIENT_ID и REDDIT_CLIENT_SECRET не настроены")
+
+    resp = httpx.post(
+        "https://www.reddit.com/api/v1/access_token",
+        auth=(REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET),
+        data={"grant_type": "client_credentials"},
+        headers={"User-Agent": "F1NewsMemeBot/1.0"},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    _reddit_token = data["access_token"]
+    _reddit_token_expires = time.time() + data.get("expires_in", 3600) - 60
+    logger.info("Reddit OAuth-токен получен")
+    return _reddit_token
+
+
 # ─── Парсинг Reddit ──────────────────────────────────────────────────
 
 def fetch_reddit_memes(
@@ -102,7 +134,7 @@ def fetch_reddit_memes(
     limit: int = 25,
 ) -> list[MemeItem]:
     """
-    Получить мемы из сабреддита через публичный JSON API.
+    Получить мемы из сабреддита через Reddit OAuth API.
 
     Фильтры:
     - Только изображения (post_hint == 'image')
@@ -115,13 +147,15 @@ def fetch_reddit_memes(
     now = time.time()
 
     try:
+        token = _get_reddit_token()
         headers = {
-            "User-Agent": "F1NewsMemeBot/1.0 (by /u/f1newsbot)"
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "F1NewsMemeBot/1.0",
         }
-        url = f"https://www.reddit.com/r/{subreddit}/hot.json"
+        url = f"https://oauth.reddit.com/r/{subreddit}/hot"
         params = {"limit": min(limit, 100), "raw_json": 1}
 
-        response = httpx.get(url, headers=headers, params=params, timeout=15, follow_redirects=True)
+        response = httpx.get(url, headers=headers, params=params, timeout=15)
         response.raise_for_status()
         data = response.json()
 
