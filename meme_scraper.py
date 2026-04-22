@@ -1,18 +1,22 @@
 """
 Модуль для парсинга мемов из Reddit (r/formuladank и др.).
-Использует Reddit OAuth2 API (бесплатно, 60 запросов/мин).
+Использует Reddit RSS-фид + парсинг HTML для извлечения картинок.
+Не требует авторизации и API-ключей.
 """
 
 import hashlib
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import feedparser
 import httpx
+from bs4 import BeautifulSoup
 
-from config import MEME_MIN_SCORE, MEME_MAX_AGE_HOURS, REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET
+from config import MEME_MAX_AGE_HOURS
 
 logger = logging.getLogger(__name__)
 
@@ -95,122 +99,129 @@ def clear_seen_memes() -> int:
     return count
 
 
-# ─── Reddit OAuth ─────────────────────────────────────────────────────
-
-_reddit_token: str = ""
-_reddit_token_expires: float = 0
-
-
-def _get_reddit_token() -> str:
-    """Получить OAuth-токен Reddit (кэшируется на ~1 час)."""
-    global _reddit_token, _reddit_token_expires
-
-    if _reddit_token and time.time() < _reddit_token_expires:
-        return _reddit_token
-
-    if not REDDIT_CLIENT_ID or not REDDIT_CLIENT_SECRET:
-        raise ValueError("REDDIT_CLIENT_ID и REDDIT_CLIENT_SECRET не настроены")
-
-    resp = httpx.post(
-        "https://www.reddit.com/api/v1/access_token",
-        auth=(REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET),
-        data={"grant_type": "client_credentials"},
-        headers={"User-Agent": "F1NewsMemeBot/1.0"},
-        timeout=15,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-
-    _reddit_token = data["access_token"]
-    _reddit_token_expires = time.time() + data.get("expires_in", 3600) - 60
-    logger.info("Reddit OAuth-токен получен")
-    return _reddit_token
-
-
-# ─── Парсинг Reddit ──────────────────────────────────────────────────
+# ─── Парсинг Reddit RSS ───────────────────────────────────────────────
 
 def fetch_reddit_memes(
     subreddit: str = "formuladank",
     limit: int = 25,
 ) -> list[MemeItem]:
     """
-    Получить мемы из сабреддита через Reddit OAuth API.
+    Получить мемы из сабреддита через RSS-фид.
+    RSS не требует авторизации и не блокируется на EC2.
 
     Фильтры:
-    - Только изображения (post_hint == 'image')
-    - score >= MEME_MIN_SCORE
+    - Только посты с картинками (ищем <img> в контенте)
     - Не старше MEME_MAX_AGE_HOURS часов
-    - Без NSFW
     """
     items: list[MemeItem] = []
     max_age_seconds = MEME_MAX_AGE_HOURS * 3600
     now = time.time()
 
     try:
-        token = _get_reddit_token()
         headers = {
-            "Authorization": f"Bearer {token}",
-            "User-Agent": "F1NewsMemeBot/1.0",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
-        url = f"https://oauth.reddit.com/r/{subreddit}/hot"
-        params = {"limit": min(limit, 100), "raw_json": 1}
+        rss_url = f"https://www.reddit.com/r/{subreddit}/hot.rss?limit={min(limit, 100)}"
 
-        response = httpx.get(url, headers=headers, params=params, timeout=15)
+        response = httpx.get(rss_url, headers=headers, timeout=15, follow_redirects=True)
         response.raise_for_status()
-        data = response.json()
+        feed = feedparser.parse(response.text)
 
-        for child in data.get("data", {}).get("children", []):
-            post = child.get("data", {})
-
-            # Фильтры
-            if post.get("over_18", False):
-                continue
-            if post.get("post_hint") != "image":
-                continue
-            score = post.get("score", 0)
-            if score < MEME_MIN_SCORE:
-                continue
-            created = post.get("created_utc", 0)
-            if now - created > max_age_seconds:
-                continue
-
-            image_url = post.get("url_overridden_by_dest", "") or post.get("url", "")
-            if not image_url or not any(
-                image_url.lower().endswith(ext)
-                for ext in (".jpg", ".jpeg", ".png", ".gif", ".webp")
-            ):
-                # Попробовать preview
-                preview = post.get("preview", {})
-                images = preview.get("images", [])
-                if images:
-                    image_url = images[0].get("source", {}).get("url", "")
-                if not image_url:
+        for entry in feed.entries:
+            # Проверить возраст
+            published = entry.get("updated_parsed") or entry.get("published_parsed")
+            if published:
+                entry_time = time.mktime(published)
+                if now - entry_time > max_age_seconds:
                     continue
 
-            permalink = post.get("permalink", "")
-            full_permalink = f"https://reddit.com{permalink}" if permalink else ""
+            # Извлечь картинку из HTML-контента
+            content_html = ""
+            if hasattr(entry, "content") and entry.content:
+                content_html = entry.content[0].get("value", "")
+            elif hasattr(entry, "summary"):
+                content_html = entry.summary or ""
+
+            if not content_html:
+                continue
+
+            # Ищем картинку в контенте
+            image_url = _extract_image_url(content_html)
+            if not image_url:
+                continue
+
+            permalink = entry.get("link", "")
+            title = entry.get("title", "").strip()
+            if not title or not permalink:
+                continue
 
             items.append(MemeItem(
-                title=post.get("title", ""),
+                title=title,
                 image_url=image_url,
-                score=score,
-                permalink=full_permalink,
+                score=0,  # RSS не даёт score
+                permalink=permalink,
                 subreddit=subreddit,
-                created_utc=created,
+                created_utc=time.mktime(published) if published else now,
             ))
 
-        logger.info(f"Reddit r/{subreddit}: найдено {len(items)} мемов (score>={MEME_MIN_SCORE}, <{MEME_MAX_AGE_HOURS}h)")
+        logger.info(f"Reddit RSS r/{subreddit}: найдено {len(items)} мемов (<{MEME_MAX_AGE_HOURS}h)")
 
     except Exception as e:
-        logger.error(f"Ошибка парсинга Reddit r/{subreddit}: {e}")
+        logger.error(f"Ошибка парсинга Reddit RSS r/{subreddit}: {e}")
 
     return items
+
+
+def _extract_image_url(html_content: str) -> str:
+    """Извлечь URL картинки из HTML-контента RSS-записи Reddit."""
+    soup = BeautifulSoup(html_content, "html.parser")
+
+    # 1. Ищем <img> теги (основной способ)
+    for img in soup.find_all("img"):
+        src = img.get("src", "")
+        if _is_meme_image(src):
+            return src
+
+    # 2. Ищем прямые ссылки на картинки в <a> тегах
+    for a in soup.find_all("a"):
+        href = a.get("href", "")
+        if _is_meme_image(href):
+            return href
+
+    # 3. Ищем i.redd.it ссылки в тексте
+    text = soup.get_text()
+    match = re.search(r'https?://i\.redd\.it/\S+\.(?:jpg|jpeg|png|gif|webp)', text)
+    if match:
+        return match.group(0)
+
+    return ""
+
+
+def _is_meme_image(url: str) -> bool:
+    """Проверить, является ли URL картинкой-мемом (не иконкой/аватаркой)."""
+    if not url:
+        return False
+    url_lower = url.lower()
+    # Пропускаем маленькие иконки Reddit
+    if "emoji" in url_lower or "icon" in url_lower or "avatar" in url_lower:
+        return False
+    if "styles.redditmedia.com" in url_lower:
+        return False
+    # Принимаем i.redd.it и preview.redd.it (основные хосты картинок Reddit)
+    if "i.redd.it" in url_lower or "preview.redd.it" in url_lower:
+        return True
+    # Принимаем imgur
+    if "imgur.com" in url_lower:
+        return True
+    # Принимаем прямые ссылки на картинки
+    if any(url_lower.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".gif", ".webp")):
+        return True
+    return False
 
 
 def collect_new_memes() -> list[MemeItem]:
     """
     Собрать новые (непросмотренные) мемы из всех источников.
-    Сортировка: по score убывание.
     """
     seen_data = load_seen_memes()
     seen_set = set(seen_data["seen"]) | set(seen_data["published"])
@@ -221,9 +232,6 @@ def collect_new_memes() -> list[MemeItem]:
     memes = fetch_reddit_memes("formuladank", limit=25)
     new_memes = [m for m in memes if m.uid not in seen_set]
     all_memes.extend(new_memes)
-
-    # Сортировка по score
-    all_memes.sort(key=lambda m: m.score, reverse=True)
 
     logger.info(f"Всего новых мемов: {len(all_memes)}")
     return all_memes

@@ -35,7 +35,6 @@ from config import (
     TELEGRAM_CHANNEL_ID,
     HYPE_THRESHOLD,
     CHECK_INTERVAL_MINUTES,
-    MEME_MIN_SCORE,
     MEME_HOT_SCORE,
     MEME_CHECK_INTERVAL_MINUTES,
     MEME_MAX_AGE_HOURS,
@@ -765,7 +764,7 @@ def _format_meme_caption(meme: MemeItem, custom_caption: str | None = None) -> s
     caption = custom_caption or meme.title
     return (
         f"{caption}\n\n"
-        f"👍 {meme.score} | r/{meme.subreddit}\n"
+        f"� r/{meme.subreddit}\n"
         f"🔗 {meme.permalink}"
     )
 
@@ -972,50 +971,27 @@ async def handle_meme_stop(query):
 
 
 async def scheduled_meme_check(context: ContextTypes.DEFAULT_TYPE):
-    """Фоновая проверка горячих мемов."""
+    """Фоновая проверка новых мемов — уведомление если появились свежие."""
     if owner_chat_id is None:
         return
 
     try:
-        from meme_scraper import fetch_reddit_memes, load_seen_memes
-        memes = fetch_reddit_memes("formuladank", limit=25)
-        seen_data = load_seen_memes()
-        seen_set = set(seen_data["seen"]) | set(seen_data["published"])
+        new_memes = collect_new_memes()
 
-        hot_memes = [
-            m for m in memes
-            if m.score >= MEME_HOT_SCORE and m.uid not in seen_set
-        ]
-
-        if not hot_memes:
+        if not new_memes:
             return
 
-        logger.info(f"Найдено {len(hot_memes)} горячих мемов (score >= {MEME_HOT_SCORE})")
+        count = len(new_memes)
+        logger.info(f"Найдено {count} новых мемов на Reddit")
 
-        for meme in hot_memes[:3]:  # Максимум 3 уведомления за раз
-            meme_captions[meme.uid] = meme.title
-            meme_originals[meme.uid] = meme.title
-
-            await context.bot.send_message(
-                chat_id=owner_chat_id,
-                text=f"🔥 <b>Горячий мем на Reddit!</b> (👍 {meme.score})",
-                parse_mode=ParseMode.HTML,
-            )
-            try:
-                await context.bot.send_photo(
-                    chat_id=owner_chat_id,
-                    photo=meme.image_url,
-                    caption=_format_meme_caption(meme)[:1024],
-                    reply_markup=meme_keyboard(meme.uid),
-                )
-            except Exception:
-                await context.bot.send_message(
-                    chat_id=owner_chat_id,
-                    text=_format_meme_caption(meme),
-                    reply_markup=meme_keyboard(meme.uid),
-                )
-            mark_meme_seen(meme.uid)
-            await asyncio.sleep(0.5)
+        # Просто уведомляем что есть новые мемы, не спамим картинками
+        await context.bot.send_message(
+            chat_id=owner_chat_id,
+            text=f"😂 <b>Новые мемы на Reddit!</b>\n\n"
+                 f"Найдено {count} новых мемов на r/formuladank.\n"
+                 f"Используй /memes чтобы посмотреть.",
+            parse_mode=ParseMode.HTML,
+        )
 
     except Exception as e:
         logger.error(f"Ошибка проверки мемов: {e}", exc_info=True)
