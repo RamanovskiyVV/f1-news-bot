@@ -3,6 +3,7 @@ __pycache__/
 .env
 venv/
 .venv/
+DEPLOY.md
 seen_news.json
 seen_memes.json
 image_cache.json
