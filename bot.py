@@ -945,12 +945,18 @@ async def handle_meme_original(query, uid: str):
 
 
 async def handle_meme_next(query, context: ContextTypes.DEFAULT_TYPE):
-    """Показать следующий мем из очереди."""
+    """Показать следующий мем из очереди, удалив предыдущий."""
     chat_id = query.message.chat_id
     queue = meme_queue.get(chat_id, [])
 
+    # Удалить текущий мем из диалога
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+
     if not queue:
-        await query.message.reply_text("📭 Больше мемов нет. Попробуйте /memes позже.")
+        await query.message.chat.send_message("📭 Больше мемов нет. Попробуйте /memes позже.")
         return
 
     meme = queue.pop(0)
@@ -960,11 +966,18 @@ async def handle_meme_next(query, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_meme_stop(query):
-    """Остановить просмотр мемов."""
+    """Остановить просмотр мемов и удалить сообщение с мемом."""
     chat_id = query.message.chat_id
     remaining = len(meme_queue.get(chat_id, []))
     meme_queue.pop(chat_id, None)
-    await query.message.reply_text(
+
+    # Удалить сообщение с мемом
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+
+    await query.message.chat.send_message(
         f"🛑 Просмотр мемов завершён.\n"
         f"Пропущено мемов в очереди: {remaining}"
     )
