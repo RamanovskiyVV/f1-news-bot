@@ -16,6 +16,16 @@ OPENAI_MODEL_GENERATE = os.getenv("OPENAI_MODEL_GENERATE", "gpt-5.2")
 CHECK_INTERVAL_MINUTES = int(os.getenv("CHECK_INTERVAL_MINUTES", "10"))
 HYPE_THRESHOLD = int(os.getenv("HYPE_THRESHOLD", "8"))
 
+# Google Custom Search (для поиска фото к новостям)
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID", "")
+
+# Мемы (Reddit)
+MEME_MIN_SCORE = int(os.getenv("MEME_MIN_SCORE", "100"))
+MEME_HOT_SCORE = int(os.getenv("MEME_HOT_SCORE", "500"))
+MEME_CHECK_INTERVAL_MINUTES = int(os.getenv("MEME_CHECK_INTERVAL_MINUTES", "30"))
+MEME_MAX_AGE_HOURS = int(os.getenv("MEME_MAX_AGE_HOURS", "24"))
+
 # Список источников F1
 F1_SOURCES = [
     {

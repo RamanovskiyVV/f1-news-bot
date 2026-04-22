@@ -347,3 +347,44 @@ async def find_related_post(
     except Exception as e:
         logger.error(f"Ошибка поиска связанного поста: {e}")
         return None
+
+
+async def translate_meme_caption(title: str) -> str:
+    """
+    Перевести подпись мема с английского на русский с сохранением юмора.
+
+    Использует OPENAI_MODEL_GENERATE для лучшего качества перевода шуток.
+    """
+    instructions = """Ты переводчик мемов о Формуле 1.
+
+Переведи подпись к мему на РУССКИЙ язык. Требования:
+- Сохрани юмор, иронию и сарказм оригинала
+- Сохрани игру слов, если возможно — адаптируй для русскоязычной аудитории
+- Если шутка непереводима дословно — адаптируй так, чтобы было смешно по-русски
+- Сохрани отсылки к F1 (имена пилотов, команд, терминологию)
+- Верни ТОЛЬКО перевод, без пояснений и комментариев
+- Не добавляй кавычки вокруг перевода"""
+
+    try:
+        response = await client.chat.completions.create(
+            model=OPENAI_MODEL_GENERATE,
+            messages=[
+                {"role": "system", "content": "Ты эксперт по F1 мемам и переводам шуток."},
+                {"role": "user", "content": instructions},
+                {"role": "user", "content": f"Подпись мема: {title}"},
+            ],
+            temperature=0.7,
+        )
+
+        translated = response.choices[0].message.content.strip()
+        # Убрать кавычки если GPT всё же обернул
+        if (translated.startswith('"') and translated.endswith('"')) or \
+           (translated.startswith('«') and translated.endswith('»')):
+            translated = translated[1:-1].strip()
+
+        logger.info(f"Перевод мема: '{title[:50]}' -> '{translated[:50]}'")
+        return translated
+
+    except Exception as e:
+        logger.error(f"Ошибка перевода мема: {e}")
+        return f"[Ошибка перевода] {title}"

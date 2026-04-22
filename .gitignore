@@ -2,7 +2,10 @@ __pycache__/
 *.pyc
 .env
 venv/
+.venv/
 seen_news.json
+seen_memes.json
+image_cache.json
 owner_chat_id.json
 published_posts.json
 daily_cache.json
