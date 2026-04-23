@@ -84,8 +84,23 @@ meme_editing: dict[int, str] = {}
 # Саммари уже отправленных сегодня горячих алертов (для дедупа по теме)
 _sent_topics: list[str] = []
 _sent_topics_date: str = ""
-# Флаг: уведомление о мемах уже отправлено — сбрасывается при /memes
-_meme_notification_sent: bool = False
+# Файл-флаг: уведомление о мемах уже отправлено — сбрасывается при /memes
+_MEME_NOTIFIED_FILE = Path(__file__).parent / ".meme_notified"
+
+def _is_meme_notified() -> bool:
+    """Проверить, было ли уведомление уже отправлено (сохранено на диск)."""
+    return _MEME_NOTIFIED_FILE.exists()
+
+def _set_meme_notified() -> None:
+    """Пометить что уведомление отправлено."""
+    _MEME_NOTIFIED_FILE.write_text("1")
+
+def _clear_meme_notified() -> None:
+    """Сбросить флаг — пользователь посмотрел мемы."""
+    try:
+        _MEME_NOTIFIED_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
 # Дневной кэш ВСЕХ проанализированных новостей (дата -> список dict)
 # Хранит новости за текущий день для команды /digest, сохраняется в файл
 daily_news_cache: dict[str, list[dict]] = load_daily_cache()
@@ -801,13 +816,11 @@ async def _show_meme(chat, meme: MemeItem, is_translated: bool = False):
 
 async def cmd_memes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /memes — показать свежие мемы из Reddit."""
-    global _meme_notification_sent
-
     if not _is_owner(update.effective_chat.id):
         return
 
     # Сбросить флаг уведомления — пользователь пришёл смотреть мемы
-    _meme_notification_sent = False
+    _clear_meme_notified()
 
     msg = await update.message.reply_text("🔍 Ищу свежие мемы на Reddit...")
 
@@ -992,13 +1005,11 @@ async def handle_meme_stop(query):
 
 async def scheduled_meme_check(context: ContextTypes.DEFAULT_TYPE):
     """Фоновая проверка новых мемов — уведомление если появились свежие."""
-    global _meme_notification_sent
-
     if owner_chat_id is None:
         return
 
     # Если уведомление уже отправлено и пользователь ещё не посмотрел — не спамить
-    if _meme_notification_sent:
+    if _is_meme_notified():
         return
 
     try:
@@ -1010,7 +1021,7 @@ async def scheduled_meme_check(context: ContextTypes.DEFAULT_TYPE):
         count = len(new_memes)
         logger.info(f"Найдено {count} новых мемов на Reddit")
 
-        _meme_notification_sent = True
+        _set_meme_notified()
 
         # Просто уведомляем что есть новые мемы, не спамим картинками
         await context.bot.send_message(

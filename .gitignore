@@ -6,6 +6,7 @@ venv/
 DEPLOY.md
 seen_news.json
 seen_memes.json
+.meme_notified
 image_cache.json
 owner_chat_id.json
 published_posts.json
