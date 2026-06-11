@@ -17,12 +17,12 @@ _MONTHS_RU = ["", "января", "февраля", "марта", "апреля"
 
 _SESSION_LABELS: dict[str, tuple[str, str]] = {
     # (emoji, Russian name)
-    "Practice 1":          ("🏎", "Свободная практика 1"),
-    "Practice 2":          ("🏎", "Свободная практика 2"),
-    "Practice 3":          ("🏎", "Свободная практика 3"),
-    "Free Practice 1":     ("🏎", "Свободная практика 1"),
-    "Free Practice 2":     ("🏎", "Свободная практика 2"),
-    "Free Practice 3":     ("🏎", "Свободная практика 3"),
+    "Practice 1":          ("🛞", "Свободная практика 1"),
+    "Practice 2":          ("🛞", "Свободная практика 2"),
+    "Practice 3":          ("🛞", "Свободная практика 3"),
+    "Free Practice 1":     ("🛞", "Свободная практика 1"),
+    "Free Practice 2":     ("🛞", "Свободная практика 2"),
+    "Free Practice 3":     ("🛞", "Свободная практика 3"),
     "Qualifying":          ("⏱", "Квалификация"),
     "Sprint Qualifying":   ("⏱", "Спринт-квалификация"),
     "Sprint":              ("🏎", "Спринт"),
@@ -37,11 +37,10 @@ def _fmt_date_header(dt: datetime) -> str:
 
 
 def _fmt_times(dt_utc: datetime) -> str:
-    """'14:00 МСК  ·  13:00 CET'"""
+    """Two lines: MSK/Minsk and CET"""
     msk = dt_utc.astimezone(_TZ_MSK)
     cet = dt_utc.astimezone(_TZ_CET)
-    cet_label = "CEST" if cet.utcoffset().total_seconds() == 7200 else "CET"
-    return f"{msk.strftime('%H:%M')} МСК  ·  {cet.strftime('%H:%M')} {cet_label}"
+    return f"{msk.strftime('%H:%M')} Минск/МСК\n{cet.strftime('%H:%M')} CET"
 
 
 async def get_schedule_message(meeting_key: int | None = None) -> str:
