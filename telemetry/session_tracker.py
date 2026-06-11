@@ -139,6 +139,11 @@ class SessionTracker:
                 meeting_name=meeting_name,
                 meeting_key=meeting_key,
             )
+            # If session is already over when we first see it — mark as done
+            if _session_is_finished(session_doc):
+                self._state.started = True
+                self._state.ended = True
+                logger.info("Session already finished on detection, skipping: %s — %s", meeting_name, sname)
             # Store enriched doc for later use
             self._state._session_doc = session_doc
             # Build driver map

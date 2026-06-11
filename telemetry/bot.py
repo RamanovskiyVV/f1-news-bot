@@ -212,17 +212,31 @@ async def job_poll(context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     state = _tracker.current_session
     if state is None:
-        text = "📡 <b>Телеметрия</b>\n\nАктивных сессий нет."
-    else:
-        status = "🟢 Активна" if state.started and not state.ended else "⏳ Ожидание"
+        text = "📡 <b>Телеметрия</b>\n\nСессий ещё не обнаружено."
+    elif state.ended:
+        text = (
+            f"📡 <b>Телеметрия</b>\n\n"
+            f"Последняя сессия: <b>{state.session_name}</b>\n"
+            f"Гран-при: <b>{state.meeting_name}</b>\n"
+            f"Статус: ✅ Завершена\n\n"
+            f"<i>Ожидание следующей сессии...</i>"
+        )
+    elif state.started:
         text = (
             f"📡 <b>Телеметрия</b>\n\n"
             f"Сессия: <b>{state.session_name}</b>\n"
             f"Гран-при: <b>{state.meeting_name}</b>\n"
-            f"Статус: {status}\n"
+            f"Статус: 🟢 Активна\n"
             f"Пит-стопов обнаружено: {sum(state.pit_counts.values())}\n"
             f"Race control сообщений: {len(state.seen_rc)}\n"
             f"Team radio обработано: {len(state.seen_radio)}"
+        )
+    else:
+        text = (
+            f"📡 <b>Телеметрия</b>\n\n"
+            f"Следующая сессия: <b>{state.session_name}</b>\n"
+            f"Гран-при: <b>{state.meeting_name}</b>\n"
+            f"Статус: ⏳ Ещё не началась"
         )
     await update.message.reply_html(text)
 
