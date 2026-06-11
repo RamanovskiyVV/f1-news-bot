@@ -60,9 +60,51 @@ class OpenF1Client:
     # ── Session ────────────────────────────────────────────────────────────────
 
     async def get_latest_session(self) -> dict | None:
-        """Return the most recently started or in-progress session."""
-        data = await self._get("/sessions", {"session_key": "latest"})
-        return data[0] if data else None
+        """Return the active or next upcoming session.
+        Falls back to the most recent past session only if nothing else found.
+        """
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+
+        # Get all sessions for current year
+        year = now.year
+        data = await self._get("/sessions", {"year": year})
+        if not data:
+            # Fallback to API's own "latest" if year query fails
+            fallback = await self._get("/sessions", {"session_key": "latest"})
+            return fallback[0] if fallback else None
+
+        # Sort by start time
+        def _dt(s):
+            try:
+                return datetime.fromisoformat(s["date_start"])
+            except Exception:
+                return datetime.min.replace(tzinfo=timezone.utc)
+
+        data.sort(key=_dt)
+
+        # 1. Currently active session (started but not yet ended)
+        for s in data:
+            try:
+                ds = datetime.fromisoformat(s["date_start"])
+                de = datetime.fromisoformat(s["date_end"])
+                if ds <= now <= de:
+                    return s
+            except Exception:
+                continue
+
+        # 2. Next upcoming session
+        for s in data:
+            try:
+                ds = datetime.fromisoformat(s["date_start"])
+                if ds > now:
+                    return s
+            except Exception:
+                continue
+
+        # 3. Most recent past session
+        past = [s for s in data if _dt(s) <= now]
+        return past[-1] if past else None
 
     async def get_session(self, session_key: int) -> dict | None:
         data = await self._get("/sessions", {"session_key": session_key})
