@@ -281,6 +281,16 @@ def build_app() -> Application:
     _app.add_handler(CommandHandler("status", cmd_status))
     _app.add_handler(CommandHandler("schedule", cmd_schedule))
 
+    # Telegram UI menu
+    async def post_init(app):
+        from telegram import BotCommand
+        await app.bot.set_my_commands([
+            BotCommand("status",   "📡 Статус трекера и текущей сессии"),
+            BotCommand("schedule", "🗓 Расписание ближайшего уикенда"),
+        ])
+
+    _app.post_init = post_init
+
     # Job queue for polling
     _app.job_queue.run_repeating(
         job_poll,
