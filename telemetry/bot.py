@@ -27,6 +27,7 @@ from .formatter import (
     fmt_team_radio,
 )
 from .radio_processor import process_radio
+from .schedule import get_schedule_message
 from .session_tracker import PRACTICE_SESSION_TYPES, SessionTracker
 
 logger = logging.getLogger(__name__)
@@ -226,6 +227,22 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_html(text)
 
 
+async def cmd_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send the upcoming weekend schedule to the channel."""
+    assert _app
+    try:
+        text = await get_schedule_message()
+        await _app.bot.send_message(
+            chat_id=TELEMETRY_CHANNEL_ID,
+            text=text,
+            parse_mode=ParseMode.HTML,
+        )
+        await update.message.reply_text("✅ Расписание отправлено в канал")
+    except Exception as e:
+        logger.exception("cmd_schedule failed")
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+
+
 # ── App builder ────────────────────────────────────────────────────────────────
 
 def build_app() -> Application:
@@ -248,6 +265,7 @@ def build_app() -> Application:
 
     # Commands
     _app.add_handler(CommandHandler("status", cmd_status))
+    _app.add_handler(CommandHandler("schedule", cmd_schedule))
 
     # Job queue for polling
     _app.job_queue.run_repeating(
