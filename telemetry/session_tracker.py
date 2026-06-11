@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
 
 from .openf1_client import OpenF1Client
@@ -19,6 +19,27 @@ LIVE_SESSION_TYPES = {"Race", "Sprint", "Qualifying", "Sprint Qualifying"}
 # Sessions that only get top-3 at the end
 PRACTICE_SESSION_TYPES = {"Practice 1", "Practice 2", "Practice 3",
                            "Free Practice 1", "Free Practice 2", "Free Practice 3"}
+
+
+def _session_is_active(session_doc: dict) -> bool:
+    """True if current UTC time is within session window (+90 min buffer for long sessions)."""
+    try:
+        date_start = datetime.fromisoformat(session_doc["date_start"])
+        date_end = datetime.fromisoformat(session_doc["date_end"])
+        now = datetime.now(timezone.utc)
+        return date_start <= now <= date_end + timedelta(minutes=90)
+    except (KeyError, ValueError):
+        return False
+
+
+def _session_is_finished(session_doc: dict) -> bool:
+    """True if current UTC time is past the session end (+90 min buffer)."""
+    try:
+        date_end = datetime.fromisoformat(session_doc["date_end"])
+        now = datetime.now(timezone.utc)
+        return now > date_end + timedelta(minutes=90)
+    except (KeyError, ValueError):
+        return False
 
 
 @dataclass
@@ -95,17 +116,31 @@ class SessionTracker:
             return
 
         sk = session_doc["session_key"]
-        status = session_doc.get("session_status", "")
         sname = session_doc.get("session_name", "")
+        is_active = _session_is_active(session_doc)
+        is_finished = _session_is_finished(session_doc)
 
         # ── New session detected ───────────────────────────────────────────────
         if self._state is None or self._state.session_key != sk:
+            # Fetch meeting name from /meetings
+            meeting_key = session_doc.get("meeting_key", 0)
+            meeting_name = session_doc.get("meeting_name", "")
+            if not meeting_name and meeting_key:
+                meeting = await client.get_meeting(meeting_key)
+                if meeting:
+                    meeting_name = meeting.get("meeting_name", "") or meeting.get("location", "")
+                    # Enrich session_doc so formatters get the data
+                    session_doc["meeting_name"] = meeting_name
+                    session_doc["circuit_short_name"] = session_doc.get("circuit_short_name") or meeting.get("circuit_short_name", "")
+
             self._state = SessionState(
                 session_key=sk,
                 session_name=sname,
-                meeting_name=session_doc.get("meeting_name", ""),
-                meeting_key=session_doc.get("meeting_key", 0),
+                meeting_name=meeting_name,
+                meeting_key=meeting_key,
             )
+            # Store enriched doc for later use
+            self._state._session_doc = session_doc
             # Build driver map
             drivers = await client.get_drivers(sk)
             for d in drivers:
@@ -113,20 +148,27 @@ class SessionTracker:
                 acr = d.get("name_acronym", "???")
                 if dn:
                     self._state.driver_map[dn] = acr.upper()
-            logger.info("New session detected: %s (key=%s)", sname, sk)
+            logger.info("New session detected: %s — %s (key=%s)", meeting_name, sname, sk)
+        else:
+            # Keep session_doc up to date with meeting_name
+            if self._state.meeting_name:
+                session_doc["meeting_name"] = self._state.meeting_name
+            session_doc["circuit_short_name"] = session_doc.get("circuit_short_name") or getattr(self._state, "_session_doc", {}).get("circuit_short_name", "")
 
         state = self._state
 
         # ── Announce start ─────────────────────────────────────────────────────
-        if status in ("Started",) and not state.started:
+        if is_active and not state.started:
             state.started = True
+            logger.info("Session started: %s — %s", state.meeting_name, sname)
             if self.on_session_start:
                 await self.on_session_start(session_doc)
 
         # ── If session not active, skip live events ────────────────────────────
-        if status not in ("Started",):
-            if status in ("Finished", "Aborted") and state.started and not state.ended:
+        if not is_active:
+            if is_finished and state.started and not state.ended:
                 state.ended = True
+                logger.info("Session ended: %s — %s", state.meeting_name, sname)
                 if self.on_session_end:
                     await self.on_session_end(session_doc)
             return

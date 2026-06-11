@@ -71,6 +71,10 @@ class OpenF1Client:
     async def get_sessions_for_meeting(self, meeting_key: int) -> list[dict]:
         return await self._get("/sessions", {"meeting_key": meeting_key})
 
+    async def get_meeting(self, meeting_key: int) -> dict | None:
+        data = await self._get("/meetings", {"meeting_key": meeting_key})
+        return data[0] if data else None
+
     # ── Drivers ────────────────────────────────────────────────────────────────
 
     async def get_drivers(self, session_key: int) -> list[dict]:
