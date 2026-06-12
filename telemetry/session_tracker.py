@@ -108,6 +108,7 @@ class SessionTracker:
         self._state: SessionState | None = None
         self._livetiming_task: asyncio.Task | None = None
         self._livetiming_client: LiveTimingClient | None = None
+        self._startup_check_done: bool = False  # fire missed-session only once on startup
 
     # -- Public -----------------------------------------------------------------
 
@@ -158,22 +159,32 @@ class SessionTracker:
         # -- New session --------------------------------------------------------
         if self._state is None or self._state.session_key != sk:
 
-            # Transitioning from bootstrap state: fire on_session_end for the
-            # session that ran while we had no OpenF1 data.
-            if (
+            # Case 1: Transitioning from bootstrap state (ran during 401 window).
+            # Case 2: Fresh start (_state is None) — check if a session finished
+            #         while the bot was down and we missed its on_session_end.
+            is_bootstrap_transition = (
                 self._state is not None
                 and self._state.session_key == -1
                 and self._state.started
                 and not self._state.ended
-            ):
+            )
+            is_fresh_start = self._state is None and not self._startup_check_done
+
+            if is_bootstrap_transition or is_fresh_start:
+                self._startup_check_done = True
+
+            if is_bootstrap_transition or is_fresh_start:
                 missed = await self._find_missed_session(client, sk)
                 if missed:
+                    label = "Bootstrap ended" if is_bootstrap_transition else "Fresh start"
                     logger.info(
-                        "Bootstrap ended -- firing on_session_end for: %s %s",
+                        "%s -- firing on_session_end for missed: %s %s",
+                        label,
                         missed.get("meeting_name"), missed.get("session_name"),
                     )
-                    self._state.ended = True
-                    await self._stop_livetiming()
+                    if is_bootstrap_transition:
+                        self._state.ended = True
+                        await self._stop_livetiming()
                     if self.on_session_end:
                         await self.on_session_end(missed)
 
