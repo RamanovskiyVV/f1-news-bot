@@ -123,9 +123,26 @@ async def _send_session_results(session: dict) -> bool:
     return False
 
 
-async def _on_session_end(session: dict) -> None:
+async def _on_session_end(session: dict, live_laps: dict | None = None, driver_map: dict | None = None) -> None:
     if not session.get("meeting_name") or not session.get("session_name"):
         return
+
+    sname = session.get("session_name", "")
+    is_fp = any(sname.startswith(p) for p in ("Practice", "Free Practice", "FP"))
+
+    # For practice: if we have live data from SignalR, send immediately
+    if is_fp and live_laps:
+        sorted_laps = sorted(live_laps.items(), key=lambda x: x[1])
+        results = []
+        for pos, (dn, lap_secs) in enumerate(sorted_laps, 1):
+            acr = (driver_map or {}).get(dn, str(dn))
+            mins = int(lap_secs // 60)
+            rem = lap_secs - mins * 60
+            time_str = f"{mins}:{rem:06.3f}"
+            results.append({"Position": pos, "Abbreviation": acr, "BroadcastName": acr, "BestLapTime": time_str})
+        if results:
+            await _send(fmt_practice_top3(session, results))
+            return
 
     # Try to send results; schedule retries if FastF1 data not yet available
     sent = await _send_session_results(session)

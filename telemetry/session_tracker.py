@@ -331,7 +331,11 @@ class SessionTracker:
         logger.info("Session ended: %s -- %s", state.meeting_name, state.session_name)
         await self._stop_livetiming()
         if self.on_session_end:
-            await self.on_session_end(state.session_doc)
+            await self.on_session_end(
+                state.session_doc,
+                live_laps=dict(state.best_laps),
+                driver_map=dict(state.driver_map),
+            )
 
     # -- Live message dispatcher ------------------------------------------------
 
@@ -353,8 +357,8 @@ class SessionTracker:
                 self._process_driver_list(data, state)
             elif topic == "TimingAppData":
                 self._process_timing_app_data(data, state)
-            elif topic == "TimingData" and is_live:
-                await self._process_timing_data(data, state)
+            elif topic == "TimingData":
+                await self._process_timing_data(data, state, emit_events=is_live)
             elif topic == "PitLaneTimeCollection" and is_live:
                 await self._process_pit_data(data, state)
             elif topic == "RaceControlMessages":
@@ -479,7 +483,7 @@ class SessionTracker:
 
     # -- TimingData: positions + fastest laps -----------------------------------
 
-    async def _process_timing_data(self, data: dict, state: SessionState) -> None:
+    async def _process_timing_data(self, data: dict, state: SessionState, emit_events: bool = True) -> None:
         lines = data.get("Lines", {})
         if not isinstance(lines, dict):
             return
@@ -519,7 +523,7 @@ class SessionTracker:
                             state.overall_fastest = lap_secs
                             state.overall_fastest_driver = dn
                             acr = state.driver_map.get(dn, str(dn))
-                            if self.on_fastest_lap:
+                            if emit_events and self.on_fastest_lap:
                                 await self.on_fastest_lap(
                                     acronym=acr,
                                     lap_time=lap_secs,
