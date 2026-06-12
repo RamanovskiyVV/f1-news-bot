@@ -1,45 +1,55 @@
-"""Live F1 timing data via the official public SignalR stream.
+﻿"""Live F1 timing data via the official SignalR Core stream.
 
-Connects to livetiming.formula1.com/signalr — the same free public
-endpoint that FastF1 uses for recording. No authentication required.
+Protocol: ASP.NET Core SignalR (JSON, NOT the legacy SignalR 2.x).
+Endpoint: wss://livetiming.formula1.com/signalrcore
 
-Protocol: ASP.NET SignalR 2.x (NOT the modern ASP.NET Core SignalR).
-  1. GET /signalr/negotiate → ConnectionToken
-  2. WSS /signalr/connect?transport=webSockets&...
-  3. Send {"H":"Streaming","M":"Subscribe","A":[topics],"I":1}
-  4. Receive initial snapshot {"R":{topic: full_state}} then
-     incremental updates {"M":[{"H":"Streaming","M":"feed","A":[topic,delta,...]}]}
+Authentication:
+  Requires an F1TV subscription token (F1TV Access = free tier works).
+  Set F1_SUBSCRIPTION_TOKEN env var with the JWT token.
+  To get the token for the first time, run:
+    python -c "from fastf1.internals.f1auth import get_auth_token; get_auth_token()"
+  Then open the printed URL in your browser, log in, and copy the token.
+
+Connection flow:
+  1. OPTIONS /signalrcore/negotiate  -> get AWSALBCORS cookie
+  2. POST /signalrcore/negotiate?negotiateVersion=1 with Bearer token
+     -> get connectionToken / URL
+  3. WSS with ?access_token=<token>
+  4. Send handshake: {"protocol":"json","version":1} + \x1e
+  5. Server responds: {} + \x1e
+  6. Send Subscribe invocation for desired topics
+  7. Server sends feed messages as type=1 invocations
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-import time
-import urllib.parse
+import os
 from typing import Any, Awaitable, Callable
 
 import aiohttp
 
 logger = logging.getLogger(__name__)
 
-_HUB_URL = "https://livetiming.formula1.com/signalr"
-_CONNECTION_DATA = '[{"name":"Streaming"}]'
-_PROTOCOL = "1.5"
-_HEADERS = {"User-Agent": "BestHTTP/2"}
+_NEGOTIATE_URL   = "https://livetiming.formula1.com/signalrcore/negotiate"
+_CONNECTION_URL  = "wss://livetiming.formula1.com/signalrcore"
+_MSG_SEPARATOR   = "\x1e"          # SignalR Core record separator
 _RECONNECT_DELAY = 5.0
 
-# Topics we subscribe to (subset of what F1 provides)
+# Topics we subscribe to
 TOPICS = [
-    "SessionInfo",      # meeting name, session name, start/end dates
-    "TimingData",       # positions, gap, lap times
-    "TimingAppData",    # tyre compounds (stints)
-    "DriverList",       # racing numbers, names, teams
+    "SessionInfo",
+    "TimingData",
+    "TimingAppData",
+    "DriverList",
     "RaceControlMessages",
     "TeamRadio",
     "PitLaneTimeCollection",
     "TrackStatus",
     "SessionStatus",
+    "LapCount",
+    "Heartbeat",
 ]
 
 # Base URL for team radio audio files
@@ -74,7 +84,7 @@ def parse_lap_time(s: str | None) -> float | None:
 
 class LiveTimingClient:
     """
-    Streams F1 live timing data via the official public SignalR endpoint.
+    Streams F1 live timing data via the official SignalR Core endpoint.
 
     Usage::
 
@@ -84,22 +94,20 @@ class LiveTimingClient:
         ...
         task.cancel()
 
-    *on_message* is called once for the initial full-state snapshot
-    and then for every incremental update message.
-
-    Accumulated state per topic is available via ``get_state(topic)``.
+    Requires F1_SUBSCRIPTION_TOKEN environment variable (free F1TV account).
     """
 
     def __init__(self) -> None:
         self.on_message: MessageCallback | None = None
         self._state: dict[str, Any] = {}
         self._running = False
+        self._token: str = os.getenv("F1_SUBSCRIPTION_TOKEN", "")
 
     def get_state(self, topic: str) -> Any:
         return self._state.get(topic)
 
     async def run(self) -> None:
-        """Stream data until cancelled.  Auto-reconnects on transient errors."""
+        """Stream data until cancelled. Auto-reconnects on transient errors."""
         self._running = True
         while self._running:
             try:
@@ -110,49 +118,75 @@ class LiveTimingClient:
                 if not self._running:
                     break
                 logger.warning(
-                    "LiveTiming disconnected (%s) — reconnecting in %.0fs",
+                    "LiveTiming disconnected (%s) -- reconnecting in %.0fs",
                     e, _RECONNECT_DELAY,
                 )
                 await asyncio.sleep(_RECONNECT_DELAY)
 
-    # ── Internal ───────────────────────────────────────────────────────────────
+    # -- Internal ---------------------------------------------------------------
 
     async def _connect_and_stream(self) -> None:
+        if not self._token:
+            raise RuntimeError(
+                "F1_SUBSCRIPTION_TOKEN is not set. "
+                "Get a free F1TV Access token via: "
+                "python -c \"from fastf1.internals.f1auth import get_auth_token; get_auth_token()\""
+            )
+
         timeout = aiohttp.ClientTimeout(total=None, connect=15, sock_connect=15)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            # Step 1 – negotiate
-            token = await self._negotiate(session)
-            if not token:
-                raise RuntimeError("SignalR negotiate returned no ConnectionToken")
+            # Step 1: pre-negotiate to get AWSALBCORS cookie
+            awsalb_cookie = await self._get_awsalb_cookie(session)
 
-            # Step 2 – build WebSocket URL
-            ws_url = (
-                f"wss://livetiming.formula1.com/signalr/connect"
-                f"?transport=webSockets"
-                f"&clientProtocol={_PROTOCOL}"
-                f"&connectionToken={urllib.parse.quote(token, safe='')}"
-                f"&connectionData={urllib.parse.quote(_CONNECTION_DATA, safe='')}"
-                f"&tid=10"
-            )
-            logger.info("Connecting to F1 live timing...")
+            # Step 2: negotiate to get connection URL / token
+            ws_url = await self._negotiate(session, awsalb_cookie)
 
-            # Step 3 – open WebSocket
+            # Step 3: open WebSocket
+            headers = {}
+            if awsalb_cookie:
+                headers["Cookie"] = f"AWSALBCORS={awsalb_cookie}"
+
+            logger.info("Connecting to F1 live timing (SignalR Core)...")
             async with session.ws_connect(
                 ws_url,
-                headers=_HEADERS,
+                headers=headers,
                 heartbeat=30,
                 receive_timeout=120,
             ) as ws:
-                # Step 4 – subscribe
-                await ws.send_str(json.dumps({
-                    "H": "Streaming",
-                    "M": "Subscribe",
-                    "A": [TOPICS],
-                    "I": 1,
-                }))
-                logger.info("Subscribed to F1 live timing (topics: %s)", TOPICS)
+                # Step 4: SignalR Core handshake
+                await ws.send_str(
+                    json.dumps({"protocol": "json", "version": 1}) + _MSG_SEPARATOR
+                )
 
-                # Step 5 – receive
+                # Step 5: wait for handshake response {}
+                async for msg in ws:
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        frames = msg.data.split(_MSG_SEPARATOR)
+                        for frame in frames:
+                            if not frame.strip():
+                                continue
+                            parsed = json.loads(frame)
+                            if parsed == {}:
+                                # Handshake OK
+                                logger.info(
+                                    "F1 live timing connected. Subscribing to %d topics.",
+                                    len(TOPICS),
+                                )
+                                # Step 6: subscribe
+                                await ws.send_str(
+                                    json.dumps({
+                                        "type": 1,
+                                        "target": "Subscribe",
+                                        "arguments": [TOPICS],
+                                        "invocationId": "0",
+                                    }) + _MSG_SEPARATOR
+                                )
+                                break
+                        break  # exit inner loop, move to main receive loop
+                    elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                        raise RuntimeError(f"WS {msg.type.name} during handshake")
+
+                # Step 7: receive data stream
                 async for msg in ws:
                     if msg.type == aiohttp.WSMsgType.TEXT:
                         await self._handle_raw(msg.data)
@@ -160,61 +194,113 @@ class LiveTimingClient:
                         aiohttp.WSMsgType.CLOSED,
                         aiohttp.WSMsgType.ERROR,
                     ):
-                        raise RuntimeError(
-                            f"WebSocket {msg.type.name}: {msg.data}"
-                        )
+                        raise RuntimeError(f"WebSocket {msg.type.name}: {msg.data}")
 
-    async def _negotiate(self, session: aiohttp.ClientSession) -> str | None:
-        params = {
-            "clientProtocol": _PROTOCOL,
-            "connectionData": _CONNECTION_DATA,
-            "_": str(int(time.time() * 1000)),
-        }
+    async def _get_awsalb_cookie(self, session: aiohttp.ClientSession) -> str | None:
+        """Pre-negotiate OPTIONS to get AWSALBCORS sticky cookie."""
         try:
-            async with session.get(
-                f"{_HUB_URL}/negotiate",
-                params=params,
-                headers=_HEADERS,
+            async with session.options(_NEGOTIATE_URL) as r:
+                cookie = r.cookies.get("AWSALBCORS")
+                if cookie:
+                    logger.debug("Got AWSALBCORS cookie")
+                    return cookie.value
+        except Exception as e:
+            logger.debug("AWSALBCORS pre-negotiate failed (ok): %s", e)
+        return None
+
+    async def _negotiate(
+        self, session: aiohttp.ClientSession, awsalb_cookie: str | None
+    ) -> str:
+        """POST negotiate to get the WebSocket URL with access_token."""
+        headers = {"Authorization": f"Bearer {self._token}"}
+        if awsalb_cookie:
+            headers["Cookie"] = f"AWSALBCORS={awsalb_cookie}"
+
+        try:
+            async with session.post(
+                f"{_NEGOTIATE_URL}?negotiateVersion=1",
+                headers=headers,
             ) as r:
+                if r.status == 401:
+                    text = await r.text()
+                    raise RuntimeError(
+                        f"F1 auth failed (401) -- token may be expired. "
+                        f"Re-authenticate with: python -c \"from fastf1.internals.f1auth import get_auth_token; get_auth_token()\""
+                        f"\nResponse: {text[:200]}"
+                    )
                 r.raise_for_status()
                 data = await r.json(content_type=None)
-                return data.get("ConnectionToken")
-        except Exception as e:
-            logger.warning("SignalR negotiate error: %s", e)
-            return None
+        except aiohttp.ClientError as e:
+            raise RuntimeError(f"Negotiate request failed: {e}") from e
+
+        # SignalR Core returns either a URL redirect or connection info
+        if "url" in data:
+            # The server redirected us to a different hub URL
+            hub_url = data["url"]
+        else:
+            hub_url = _CONNECTION_URL
+
+        # Append access_token query param
+        sep = "&" if "?" in hub_url else "?"
+        return hub_url.replace("https://", "wss://").replace("http://", "ws://") + sep + f"access_token={self._token}"
 
     async def _handle_raw(self, raw: str) -> None:
-        try:
-            msg = json.loads(raw)
-        except json.JSONDecodeError:
-            return
+        frames = raw.split(_MSG_SEPARATOR)
+        for frame in frames:
+            frame = frame.strip()
+            if not frame:
+                continue
+            try:
+                msg = json.loads(frame)
+            except json.JSONDecodeError:
+                continue
+            await self._process_message(msg)
 
-        # ── Initial snapshot (response to our Subscribe call) ─────────────────
-        # {"R": {"TimingData": {...}, "DriverList": {...}, ...}, "I": "1"}
-        if "R" in msg and isinstance(msg["R"], dict):
-            for topic, data in msg["R"].items():
-                if isinstance(data, dict):
-                    _deep_update(self._state.setdefault(topic, {}), data)
+    async def _process_message(self, msg: dict) -> None:
+        msg_type = msg.get("type")
+
+        # Type 1: Invocation (server -> client data)
+        if msg_type == 1:
+            target = msg.get("target", "")
+            args   = msg.get("arguments", [])
+
+            if target == "feed" and args:
+                # args = [topic, data, ...extra]
+                topic = args[0]
+                data  = args[1] if len(args) > 1 else {}
+                # Accumulate state
+                if isinstance(data, dict) and isinstance(self._state.get(topic), dict):
+                    _deep_update(self._state[topic], data)
                 else:
                     self._state[topic] = data
+                # Notify handler
                 if self.on_message and self._running:
                     await self.on_message(topic, data)
-            return
 
-        # ── Incremental updates ────────────────────────────────────────────────
-        # {"C": "...", "M": [{"H":"Streaming","M":"feed","A":[topic, delta, ts]}]}
-        for item in msg.get("M", []):
-            if item.get("M") != "feed":
-                continue
-            args = item.get("A", [])
-            if len(args) < 2:
-                continue
-            topic, data = args[0], args[1]
-            # Accumulate
-            if isinstance(data, dict) and isinstance(self._state.get(topic), dict):
-                _deep_update(self._state[topic], data)
-            else:
-                self._state[topic] = data
-            # Notify
-            if self.on_message and self._running:
-                await self.on_message(topic, data)
+            elif target == "Subscribe" or args:
+                # Initial full-state snapshot from Subscribe result
+                # args = [[topic, full_data], ...] or {"topic": full_data}
+                if args and isinstance(args[0], dict):
+                    for topic, data in args[0].items():
+                        if isinstance(data, dict):
+                            _deep_update(self._state.setdefault(topic, {}), data)
+                        else:
+                            self._state[topic] = data
+                        if self.on_message and self._running:
+                            await self.on_message(topic, data)
+
+        # Type 3: Completion (response to our Subscribe invocation)
+        elif msg_type == 3:
+            result = msg.get("result", {})
+            if isinstance(result, dict):
+                for topic, data in result.items():
+                    if isinstance(data, dict):
+                        _deep_update(self._state.setdefault(topic, {}), data)
+                    else:
+                        self._state[topic] = data
+                    if self.on_message and self._running:
+                        await self.on_message(topic, data)
+
+        # Type 6: Ping / keep-alive
+        elif msg_type == 6:
+            pass  # heartbeat, nothing to do

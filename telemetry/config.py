@@ -18,6 +18,10 @@ TELEMETRY_POLL_INTERVAL = int(os.getenv("TELEMETRY_POLL_INTERVAL", "15"))
 # OpenF1 base URL
 OPENF1_BASE_URL = "https://api.openf1.org/v1"
 
+# F1TV subscription token for live timing SignalR stream (free F1TV Access account)
+# Get it once via: python -c "from fastf1.internals.f1auth import get_auth_token; get_auth_token()"
+F1_SUBSCRIPTION_TOKEN = os.getenv("F1_SUBSCRIPTION_TOKEN", "")
+
 # ── Driver metadata ────────────────────────────────────────────────────────────
 # flag emoji, full name, team key
 DRIVERS: dict[str, dict] = {
