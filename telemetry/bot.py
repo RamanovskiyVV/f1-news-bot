@@ -394,11 +394,7 @@ def build_app() -> Application:
     # Wire tracker callbacks
     _tracker.on_session_start = _on_session_start
     _tracker.on_session_end   = _on_session_end
-    _tracker.on_overtake      = _on_overtake
-    _tracker.on_fastest_lap   = _on_fastest_lap
-    _tracker.on_pit_stop      = _on_pit_stop
-    _tracker.on_race_control  = _on_race_control
-    _tracker.on_team_radio    = _on_team_radio
+    # Live event callbacks disabled (only results are posted automatically)
 
     _app = (
         Application.builder()
