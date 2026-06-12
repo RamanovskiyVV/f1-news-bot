@@ -188,20 +188,8 @@ async def _on_session_end(
             await _send(fmt_qualifying_results(session, q_results))
             return
 
-    # ── Fallback: FastF1 with retries ────────────────────────────────────────
-    sent = await _send_session_results(session)
-    if not sent:
-        logger.info("FastF1 data not available yet for %s %s -- scheduling retries",
-                    session.get("meeting_name"), session.get("session_name"))
-        assert _app
-        # Retry at 30, 60, 90, 120 minutes
-        for delay_min in (30, 60, 90, 120):
-            _app.job_queue.run_once(
-                _retry_results_job,
-                when=delay_min * 60,
-                data=session,
-                name=f"retry_results_{session.get('session_key', 'unknown')}_{delay_min}",
-            )
+    # No live data available (bot was offline during session) -- silently skip.
+    # Use /results command to manually fetch from FastF1.
 
 
 async def _retry_results_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -394,7 +382,11 @@ def build_app() -> Application:
     # Wire tracker callbacks
     _tracker.on_session_start = _on_session_start
     _tracker.on_session_end   = _on_session_end
-    # Live event callbacks disabled (only results are posted automatically)
+    _tracker.on_overtake      = _on_overtake
+    _tracker.on_fastest_lap   = _on_fastest_lap
+    _tracker.on_pit_stop      = _on_pit_stop
+    _tracker.on_race_control  = _on_race_control
+    _tracker.on_team_radio    = _on_team_radio
 
     _app = (
         Application.builder()
