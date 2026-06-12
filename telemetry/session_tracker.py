@@ -134,6 +134,20 @@ class SessionTracker:
             session_doc = self._state.session_doc
 
         if not session_doc:
+            # OpenF1 unavailable AND no cache (e.g. bot restarted mid-session).
+            # Bootstrap: start SignalR blind -- SessionInfo topic will populate state.
+            if self._state is None:
+                logger.info(
+                    "OpenF1 unavailable and no cached state -- bootstrapping SignalR"
+                )
+                self._state = SessionState(
+                    session_key=-1,
+                    session_name="Unknown",
+                    meeting_name="Unknown",
+                    meeting_key=-1,
+                    started=True,   # assume live since we can't verify
+                )
+            self._start_livetiming()
             return
 
         sk    = session_doc["session_key"]
@@ -263,7 +277,9 @@ class SessionTracker:
         )
 
         try:
-            if topic == "DriverList":
+            if topic == "SessionInfo":
+                await self._process_session_info(data, state)
+            elif topic == "DriverList":
                 self._process_driver_list(data, state)
             elif topic == "TimingAppData":
                 self._process_timing_app_data(data, state)
@@ -279,6 +295,80 @@ class SessionTracker:
                 await self._process_session_status(data, state)
         except Exception:
             logger.exception("Error processing live topic %s", topic)
+
+    # -- SessionInfo (bootstraps state when OpenF1 is unavailable) --------------
+
+    async def _process_session_info(self, data: dict, state: SessionState) -> None:
+        """Populate / update session state from the SignalR SessionInfo topic.
+
+        Called once with the full snapshot on connect, then again on changes.
+        Most important when the bot restarted mid-session and has no OpenF1 cache.
+        """
+        if not isinstance(data, dict):
+            return
+
+        session_name = data.get("Name", "")
+        meeting      = data.get("Meeting", {}) or {}
+        meeting_name = meeting.get("Name") or meeting.get("OfficialName", "")
+        meeting_key  = meeting.get("Key", -1)
+        # F1 SignalR key ≠ OpenF1 session_key but unique enough for dedup
+        session_key  = data.get("Key", -1)
+        start_str    = data.get("StartDate", "")
+        end_str      = data.get("EndDate", "")
+        gmt_offset   = data.get("GmtOffset", "00:00:00")  # e.g. "02:00:00"
+
+        if not session_name or session_key == -1:
+            return  # incomplete snapshot, wait for next
+
+        # Convert local time + GMT offset to UTC
+        def _to_utc(local_str: str) -> str | None:
+            try:
+                from datetime import datetime, timezone, timedelta
+                dt = datetime.fromisoformat(local_str)
+                if dt.tzinfo is None:
+                    h, m, _ = (int(x) for x in gmt_offset.split(":"))
+                    dt = dt.replace(tzinfo=timezone(timedelta(hours=h, minutes=m)))
+                return dt.astimezone(timezone.utc).isoformat()
+            except Exception:
+                return None
+
+        utc_start = _to_utc(start_str)
+        utc_end   = _to_utc(end_str)
+
+        is_bootstrap = (state.session_key == -1)
+
+        # Update bootstrap state with real values
+        if is_bootstrap or state.session_key != session_key:
+            state.session_key  = session_key
+            state.session_name = session_name
+            state.meeting_name = meeting_name
+            state.meeting_key  = meeting_key
+            if utc_start:
+                state.session_doc["date_start"] = utc_start
+                state.session_doc["session_key"] = session_key
+                state.session_doc["meeting_name"] = meeting_name
+                state.session_doc["session_name"] = session_name
+            if utc_end:
+                state.session_doc["date_end"] = utc_end
+            logger.info(
+                "SessionInfo received: %s -- %s (key=%s)",
+                meeting_name, session_name, session_key,
+            )
+
+        # If this was a bootstrap and session is active, fire on_session_start
+        if is_bootstrap and not state.ended:
+            if utc_start and utc_end:
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc)
+                try:
+                    ds = datetime.fromisoformat(state.session_doc["date_start"])
+                    de = datetime.fromisoformat(state.session_doc["date_end"])
+                    if ds <= now <= de:
+                        logger.info("Bootstrap confirms active session, firing on_session_start")
+                        if self.on_session_start:
+                            await self.on_session_start(state.session_doc)
+                except Exception:
+                    pass
 
     # -- DriverList -------------------------------------------------------------
 

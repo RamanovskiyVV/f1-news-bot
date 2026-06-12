@@ -31,6 +31,7 @@ _RECONNECT_DELAY = 5.0
 
 # Topics we subscribe to (subset of what F1 provides)
 TOPICS = [
+    "SessionInfo",      # meeting name, session name, start/end dates
     "TimingData",       # positions, gap, lap times
     "TimingAppData",    # tyre compounds (stints)
     "DriverList",       # racing numbers, names, teams
