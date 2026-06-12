@@ -45,6 +45,18 @@ DRIVERS: dict[str, dict] = {
     "ALB": {"flag": "🇹🇭", "name": "Albon",        "team": "williams"},
     "OCO": {"flag": "🇫🇷", "name": "Ocon",         "team": "haas"},
     "BEA": {"flag": "🇫🇷", "name": "Bearman",      "team": "haas"},
+    # Reserve / test / FP1 drivers
+    "BOT": {"flag": "🇫🇮", "name": "Bottas",       "team": "sauber"},
+    "LIN": {"flag": "🇬🇧", "name": "Lindblad",     "team": "red_bull"},
+    "COL": {"flag": "🇦🇷", "name": "Colapinto",    "team": "alpine"},
+    "BER": {"flag": "🇩🇪", "name": "Bearman",      "team": "haas"},
+    "FIT": {"flag": "🇧🇷", "name": "Fittipaldi",   "team": "haas"},
+    "MAZ": {"flag": "🇷🇺", "name": "Mazepin",      "team": "sauber"},
+    "ZHO": {"flag": "🇨🇳", "name": "Zhou",         "team": "sauber"},
+    "SAR": {"flag": "🇺🇸", "name": "Sargeant",     "team": "williams"},
+    "DEV": {"flag": "🇫🇷", "name": "De Vries",     "team": "racing_bulls"},
+    "RIC": {"flag": "🇦🇺", "name": "Ricciardo",    "team": "racing_bulls"},
+    "MAG": {"flag": "🇩🇰", "name": "Magnussen",    "team": "haas"},
 }
 
 TEAM_NAMES: dict[str, str] = {
