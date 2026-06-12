@@ -59,6 +59,13 @@ class OpenF1Client:
 
     # ── Session ────────────────────────────────────────────────────────────────
 
+    async def get_year_sessions(self) -> list[dict]:
+        """Return all sessions for the current year."""
+        from datetime import datetime, timezone
+        year = datetime.now(timezone.utc).year
+        data = await self._get("/sessions", {"year": year})
+        return data if data else []
+
     async def get_latest_session(self) -> dict | None:
         """Return the active or next upcoming session.
         Falls back to the most recent past session only if nothing else found.

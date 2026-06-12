@@ -78,18 +78,16 @@ async def _on_session_start(session: dict) -> None:
     await _send(text)
 
 
-async def _on_session_end(session: dict) -> None:
-    # 1. End-of-session header
-    await _send(fmt_session_end(session))
-
+async def _send_session_results(session: dict) -> bool:
+    """Fetch and send FastF1 summary for the given session.
+    Returns True if data was available and sent, False if no data yet."""
     sname = session.get("session_name", "")
     year_str = (session.get("date_start") or "")[:4]
     year = int(year_str) if year_str.isdigit() else 2026
     gp = session.get("meeting_name", "")
-    if not gp:
-        return
+    if not gp or not sname:
+        return False
 
-    # 2. Dispatch to the right summary fetcher
     is_race   = sname == "Race"
     is_sprint = sname == "Sprint"
     is_quali  = "Qualifying" in sname
@@ -99,8 +97,8 @@ async def _on_session_end(session: dict) -> None:
         session_id = "Race" if is_race else "Sprint"
         results, pit_stats, standings = await _gather_race_data(year, gp, session_id)
         if results:
-            text = fmt_race_results(session, results, pit_stats, standings)
-            await _send(text)
+            await _send(fmt_race_results(session, results, pit_stats, standings))
+            return True
 
     elif is_quali:
         if "Sprint" in sname:
@@ -108,8 +106,8 @@ async def _on_session_end(session: dict) -> None:
         else:
             q_results = await ff1.get_qualifying_results(year, gp)
         if q_results:
-            text = fmt_qualifying_results(session, q_results)
-            await _send(text)
+            await _send(fmt_qualifying_results(session, q_results))
+            return True
 
     elif is_fp:
         fp_num = 1
@@ -119,8 +117,52 @@ async def _on_session_end(session: dict) -> None:
                 break
         top3 = await ff1.get_practice_top3(year, gp, fp_num)
         if top3:
-            text = fmt_practice_top3(session, top3)
-            await _send(text)
+            await _send(fmt_practice_top3(session, top3))
+            return True
+
+    return False
+
+
+async def _on_session_end(session: dict) -> None:
+    # 1. End-of-session header
+    await _send(fmt_session_end(session))
+
+    if not session.get("meeting_name") or not session.get("session_name"):
+        return
+
+    # 2. Try to send results; schedule retries if FastF1 data not yet available
+    sent = await _send_session_results(session)
+    if not sent:
+        logger.info("FastF1 data not available yet for %s %s -- scheduling retries",
+                    session.get("meeting_name"), session.get("session_name"))
+        assert _app
+        # Retry at 30, 60, 90, 120 minutes
+        for delay_min in (30, 60, 90, 120):
+            _app.job_queue.run_once(
+                _retry_results_job,
+                when=delay_min * 60,
+                data=session,
+                name=f"retry_results_{session.get('session_key', 'unknown')}_{delay_min}",
+            )
+
+
+async def _retry_results_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Job queue callback: retry sending FastF1 results."""
+    session = context.job.data
+    if not session:
+        return
+    logger.info("Retrying FastF1 results for %s %s",
+                session.get("meeting_name"), session.get("session_name"))
+    sent = await _send_session_results(session)
+    if sent:
+        logger.info("Retry succeeded for %s %s",
+                    session.get("meeting_name"), session.get("session_name"))
+        # Cancel remaining retries for this session
+        name_prefix = f"retry_results_{session.get('session_key', 'unknown')}"
+        assert _app
+        for job in _app.job_queue.get_jobs_by_name(""):
+            if hasattr(job, 'name') and job.name and job.name.startswith(name_prefix):
+                job.schedule_removal()
 
 
 async def _gather_race_data(year: int, gp: str, session_id: str):
@@ -257,6 +299,35 @@ async def cmd_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text(f"❌ Ошибка: {e}")
 
 
+async def cmd_results(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manually trigger FastF1 results for the last detected session."""
+    state = _tracker.current_session
+    if state is None or not state.session_doc:
+        await update.message.reply_text("❌ Нет информации о сессии.")
+        return
+
+    session = state.session_doc
+    gp   = session.get("meeting_name", "")
+    name = session.get("session_name", "")
+    if not gp or not name:
+        await update.message.reply_text("❌ Неизвестная сессия (данных нет).")
+        return
+
+    await update.message.reply_text(f"⏳ Запрашиваю результаты {gp} — {name}...")
+    try:
+        sent = await _send_session_results(session)
+        if sent:
+            await update.message.reply_text("✅ Результаты отправлены в канал.")
+        else:
+            await update.message.reply_text(
+                "⚠️ Данные FastF1 ещё не доступны. "
+                "Попробуй ещё раз через 30–60 минут после сессии."
+            )
+    except Exception as e:
+        logger.exception("cmd_results failed")
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+
+
 # ── App builder ────────────────────────────────────────────────────────────────
 
 def build_app() -> Application:
@@ -280,6 +351,7 @@ def build_app() -> Application:
     # Commands
     _app.add_handler(CommandHandler("status", cmd_status))
     _app.add_handler(CommandHandler("schedule", cmd_schedule))
+    _app.add_handler(CommandHandler("results", cmd_results))
 
     # Telegram UI menu
     async def post_init(app):
@@ -287,6 +359,7 @@ def build_app() -> Application:
         await app.bot.set_my_commands([
             BotCommand("status",   "📡 Статус трекера и текущей сессии"),
             BotCommand("schedule", "🗓 Расписание ближайшего уикенда"),
+            BotCommand("results",  "🏁 Запросить итоги последней сессии"),
         ])
 
     _app.post_init = post_init

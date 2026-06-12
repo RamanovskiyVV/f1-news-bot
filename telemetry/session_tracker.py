@@ -157,6 +157,26 @@ class SessionTracker:
 
         # -- New session --------------------------------------------------------
         if self._state is None or self._state.session_key != sk:
+
+            # Transitioning from bootstrap state: fire on_session_end for the
+            # session that ran while we had no OpenF1 data.
+            if (
+                self._state is not None
+                and self._state.session_key == -1
+                and self._state.started
+                and not self._state.ended
+            ):
+                missed = await self._find_missed_session(client, sk)
+                if missed:
+                    logger.info(
+                        "Bootstrap ended -- firing on_session_end for: %s %s",
+                        missed.get("meeting_name"), missed.get("session_name"),
+                    )
+                    self._state.ended = True
+                    await self._stop_livetiming()
+                    if self.on_session_end:
+                        await self.on_session_end(missed)
+
             meeting_key  = session_doc.get("meeting_key", 0)
             meeting_name = session_doc.get("meeting_name", "")
             if not meeting_name and meeting_key:
@@ -218,6 +238,35 @@ class SessionTracker:
         # -- DateTime fallback for session end ----------------------------------
         if is_finished and state.started and not state.ended:
             await self._trigger_session_end()
+
+    async def _find_missed_session(
+        self, client: OpenF1Client, current_sk: int
+    ) -> dict | None:
+        """Find the most recently finished session that was active during bootstrap.
+
+        Called when transitioning from a bootstrap state (key=-1) to a real
+        session once OpenF1 becomes available again.
+        """
+        all_sessions = await client.get_year_sessions()
+        if not all_sessions:
+            return None
+        # Find finished sessions that are not the newly detected one
+        finished = [
+            s for s in all_sessions
+            if _session_is_finished(s) and s.get("session_key") != current_sk
+        ]
+        if not finished:
+            return None
+        # Take the most recently finished
+        recent = max(finished, key=lambda s: s.get("date_end", ""))
+        # Enrich with meeting name if missing
+        mk = recent.get("meeting_key", 0)
+        if not recent.get("meeting_name") and mk:
+            m = await client.get_meeting(mk)
+            if m:
+                recent["meeting_name"] = m.get("meeting_name", "") or m.get("location", "")
+                recent["circuit_short_name"] = recent.get("circuit_short_name") or m.get("circuit_short_name", "")
+        return recent
 
     # -- Live timing task management --------------------------------------------
 
