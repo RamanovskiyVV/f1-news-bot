@@ -87,6 +87,10 @@ class SessionState:
     acronym_to_dn: dict[str, int] = field(default_factory=dict)
     # {racing_number_str: tyre_compound_str} from TimingAppData
     current_tyre: dict[str, str] = field(default_factory=dict)
+    # {driver_number(int): gap_to_leader_str} -- accumulated during race/sprint
+    race_gaps: dict[int, str] = field(default_factory=dict)
+    # {driver_number(int): {"Q1": str, "Q2": str, "Q3": str}} -- qualifying segment times
+    quali_q_times: dict[int, dict] = field(default_factory=dict)
 
 
 class SessionTracker:
@@ -335,6 +339,10 @@ class SessionTracker:
                 state.session_doc,
                 live_laps=dict(state.best_laps),
                 driver_map=dict(state.driver_map),
+                live_positions=dict(state.last_positions),
+                race_gaps=dict(state.race_gaps),
+                quali_q_times=dict(state.quali_q_times),
+                pit_counts=dict(state.pit_counts),
             )
 
     # -- Live message dispatcher ------------------------------------------------
@@ -505,6 +513,21 @@ class SessionTracker:
                     new_positions[dn] = int(pos_str)
                 except ValueError:
                     pass
+
+            # Race gap to leader
+            gap = info.get("GapToLeader", "")
+            if gap and isinstance(gap, str):
+                state.race_gaps[dn] = gap
+
+            # Qualifying segment times (BestLapTimes keys "0"=Q1, "1"=Q2, "2"=Q3)
+            blt = info.get("BestLapTimes", {})
+            if isinstance(blt, dict):
+                for k, qlabel in (("0", "Q1"), ("1", "Q2"), ("2", "Q3")):
+                    entry = blt.get(k)
+                    if isinstance(entry, dict) and entry.get("Value"):
+                        if dn not in state.quali_q_times:
+                            state.quali_q_times[dn] = {}
+                        state.quali_q_times[dn][qlabel] = entry["Value"]
 
             # Fastest lap
             best = info.get("BestLapTime", {})

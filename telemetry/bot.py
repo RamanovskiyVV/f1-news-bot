@@ -123,28 +123,72 @@ async def _send_session_results(session: dict) -> bool:
     return False
 
 
-async def _on_session_end(session: dict, live_laps: dict | None = None, driver_map: dict | None = None) -> None:
+async def _on_session_end(
+    session: dict,
+    live_laps: dict | None = None,
+    driver_map: dict | None = None,
+    live_positions: dict | None = None,
+    race_gaps: dict | None = None,
+    quali_q_times: dict | None = None,
+    pit_counts: dict | None = None,
+) -> None:
     if not session.get("meeting_name") or not session.get("session_name"):
         return
 
     sname = session.get("session_name", "")
-    is_fp = any(sname.startswith(p) for p in ("Practice", "Free Practice", "FP"))
+    is_fp    = any(sname.startswith(p) for p in ("Practice", "Free Practice", "FP"))
+    is_race  = sname in ("Race", "Sprint")
+    is_quali = "Qualifying" in sname
+    dmap = driver_map or {}
 
-    # For practice: if we have live data from SignalR, send immediately
+    # ── Practice: instant from SignalR lap times ─────────────────────────────
     if is_fp and live_laps:
         sorted_laps = sorted(live_laps.items(), key=lambda x: x[1])
         results = []
         for pos, (dn, lap_secs) in enumerate(sorted_laps, 1):
-            acr = (driver_map or {}).get(dn, str(dn))
+            acr = dmap.get(dn, str(dn))
             mins = int(lap_secs // 60)
             rem = lap_secs - mins * 60
-            time_str = f"{mins}:{rem:06.3f}"
-            results.append({"Position": pos, "Abbreviation": acr, "BroadcastName": acr, "BestLapTime": time_str})
+            results.append({"Position": pos, "Abbreviation": acr, "BroadcastName": acr,
+                             "BestLapTime": f"{mins}:{rem:06.3f}"})
         if results:
             await _send(fmt_practice_top3(session, results))
             return
 
-    # Try to send results; schedule retries if FastF1 data not yet available
+    # ── Race / Sprint: instant from SignalR positions + gaps ─────────────────
+    if is_race and live_positions:
+        sorted_pos = sorted(live_positions.items(), key=lambda x: x[1])
+        results = []
+        for dn, pos in sorted_pos:
+            acr = dmap.get(dn, str(dn))
+            gap = (race_gaps or {}).get(dn, "")
+            results.append({"Position": pos, "Abbreviation": acr, "BroadcastName": acr,
+                             "Time": gap})
+        if results:
+            total_pits = sum((pit_counts or {}).values())
+            pit_stats = {"total": total_pits} if total_pits else {}
+            await _send(fmt_race_results(session, results, pit_stats, []))
+            return
+
+    # ── Qualifying: instant from SignalR Q1/Q2/Q3 times ─────────────────────
+    if is_quali and quali_q_times:
+        q_results: dict[str, list] = {"Q3": [], "Q2": [], "Q1": []}
+        for dn, qtimes in quali_q_times.items():
+            acr = dmap.get(dn, str(dn))
+            for qlabel in ("Q3", "Q2", "Q1"):
+                t = qtimes.get(qlabel)
+                if t:
+                    q_results[qlabel].append({"Abbreviation": acr, "BroadcastName": acr,
+                                               "QualifyingTime": t})
+                    break  # assign driver to best (highest) Q segment only
+        for qlabel in ("Q3", "Q2", "Q1"):
+            q_results[qlabel].sort(key=lambda r: r["QualifyingTime"])
+        q_results = {k: v for k, v in q_results.items() if v}
+        if q_results:
+            await _send(fmt_qualifying_results(session, q_results))
+            return
+
+    # ── Fallback: FastF1 with retries ────────────────────────────────────────
     sent = await _send_session_results(session)
     if not sent:
         logger.info("FastF1 data not available yet for %s %s -- scheduling retries",
