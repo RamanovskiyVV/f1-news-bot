@@ -277,7 +277,7 @@ def fmt_practice_top3(session: dict, top3: list[dict]) -> str:
 
     header = f"🕐 <b>{stype.upper()}</b>\n<b>{gp} {year}</b>"
     lines: list[str] = []
-    for i, r in enumerate(top3[:3], 1):
+    for i, r in enumerate(top3, 1):
         acr = r.get("BroadcastName", r.get("Abbreviation", "???")).upper()
         t = r.get("BestLapTime", r.get("time", "—"))
         medal = POSITION_MEDALS.get(i, f"{i}.")

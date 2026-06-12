@@ -142,8 +142,6 @@ def _get_practice_sync(year: int, gp: str | int, fp_id: str) -> list[dict]:
 
         out = []
         for pos, (drv_acr, lap_time) in enumerate(best.items(), start=1):
-            if pos > 3:
-                break
             secs = lap_time.total_seconds() if hasattr(lap_time, "total_seconds") else float(lap_time)
             if secs != secs:  # NaN
                 continue
