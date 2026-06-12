@@ -124,13 +124,10 @@ async def _send_session_results(session: dict) -> bool:
 
 
 async def _on_session_end(session: dict) -> None:
-    # 1. End-of-session header
-    await _send(fmt_session_end(session))
-
     if not session.get("meeting_name") or not session.get("session_name"):
         return
 
-    # 2. Try to send results; schedule retries if FastF1 data not yet available
+    # Try to send results; schedule retries if FastF1 data not yet available
     sent = await _send_session_results(session)
     if not sent:
         logger.info("FastF1 data not available yet for %s %s -- scheduling retries",
