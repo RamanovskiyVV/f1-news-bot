@@ -46,6 +46,7 @@ DRIVERS: dict[str, dict] = {
     "OCO": {"flag": "🇫🇷", "name": "Ocon",         "team": "haas"},
     "BEA": {"flag": "🇫🇷", "name": "Bearman",      "team": "haas"},
     # Reserve / test / FP1 drivers
+    "PER": {"flag": "🇲🇽", "name": "Perez",         "team": "red_bull"},
     "BOT": {"flag": "🇫🇮", "name": "Bottas",       "team": "sauber"},
     "LIN": {"flag": "🇬🇧", "name": "Lindblad",     "team": "red_bull"},
     "COL": {"flag": "🇦🇷", "name": "Colapinto",    "team": "alpine"},
