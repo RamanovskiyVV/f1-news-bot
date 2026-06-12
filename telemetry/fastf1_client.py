@@ -185,22 +185,30 @@ def _get_pit_stats_sync(year: int, gp: str | int, session_identifier: str) -> di
 
 def _get_driver_standings_sync(year: int) -> list[dict]:
     try:
-        # FastF1 ergast interface
-        import fastf1.ergast as ergast
-        standings = ergast.get_driver_standings(season=year)
-        if standings.content and len(standings.content) > 0:
-            table = standings.content[0]
-            out = []
-            for _, row in table.iterrows():
-                out.append({
-                    "Position": int(row.get("position", 0)),
-                    "Abbreviation": str(row.get("driverCode", "???")),
-                    "Points": float(row.get("points", 0)),
-                    "Wins": int(row.get("wins", 0)),
-                })
-            out.sort(key=lambda r: r["Position"])
-            return out[:10]
-        return []
+        # fastf1.ergast was deprecated in v3.4 — use requests directly
+        import requests
+        r = requests.get(
+            f"https://api.jolpi.ca/ergast/f1/{year}/driverStandings.json",
+            timeout=10,
+        )
+        r.raise_for_status()
+        data = r.json()
+        table = (
+            data.get("MRData", {})
+            .get("StandingsTable", {})
+            .get("StandingsLists", [{}])[0]
+            .get("DriverStandings", [])
+        )
+        out = []
+        for row in table:
+            out.append({
+                "Position": int(row.get("position", 0)),
+                "Abbreviation": str(row.get("Driver", {}).get("code", "???")),
+                "Points": float(row.get("points", 0)),
+                "Wins": int(row.get("wins", 0)),
+            })
+        out.sort(key=lambda r: r["Position"])
+        return out[:10]
     except Exception:
         logger.exception("FastF1 get_driver_standings_sync failed")
         return []

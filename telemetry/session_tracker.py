@@ -262,9 +262,19 @@ class SessionTracker:
         if not all_sessions:
             return None
         # Find finished sessions that are not the newly detected one
+        # Use a small buffer (10 min) to allow for sessions that just ended,
+        # rather than the 90-min live-tracking buffer used by _session_is_finished.
+        def _recently_ended(s: dict) -> bool:
+            try:
+                de = datetime.fromisoformat(s["date_end"])
+                now = datetime.now(timezone.utc)
+                return now > de + timedelta(minutes=10)
+            except (KeyError, ValueError):
+                return False
+
         finished = [
             s for s in all_sessions
-            if _session_is_finished(s) and s.get("session_key") != current_sk
+            if _recently_ended(s) and s.get("session_key") != current_sk
         ]
         if not finished:
             return None
