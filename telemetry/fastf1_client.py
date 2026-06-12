@@ -126,26 +126,37 @@ def _get_quali_results_sync(year: int, gp: str | int, session_identifier: str = 
 
 def _get_practice_sync(year: int, gp: str | int, fp_id: str) -> list[dict]:
     try:
-        sess = _load_session_sync(year, gp, fp_id)
-        results = sess.results
+        import fastf1
+        import pandas as pd
+        fastf1.Cache.enable_cache("/tmp/fastf1_cache")
+        sess = fastf1.get_session(year, gp, fp_id)
+        sess.load(laps=True, telemetry=False, weather=False, messages=False)
+
+        laps = sess.laps
+        if laps is None or len(laps) == 0:
+            return []
+
+        # Best lap per driver
+        quicklaps = laps.pick_quicklaps() if hasattr(laps, "pick_quicklaps") else laps
+        best = quicklaps.groupby("Driver")["LapTime"].min().dropna().sort_values()
+
         out = []
-        for _, row in results.iterrows():
-            t = row.get("Time") or row.get("Q1")
-            if hasattr(t, "total_seconds"):
-                secs = t.total_seconds()
-                mins = int(secs // 60)
-                rem = secs - mins * 60
-                time_str = f"{mins}:{rem:06.3f}"
-            else:
-                time_str = str(t) if t else "—"
+        for pos, (drv_acr, lap_time) in enumerate(best.items(), start=1):
+            if pos > 3:
+                break
+            secs = lap_time.total_seconds() if hasattr(lap_time, "total_seconds") else float(lap_time)
+            if secs != secs:  # NaN
+                continue
+            mins = int(secs // 60)
+            rem = secs - mins * 60
+            time_str = f"{mins}:{rem:06.3f}"
             out.append({
-                "Position": int(row.get("Position", 0)),
-                "Abbreviation": str(row.get("Abbreviation", "???")),
-                "BroadcastName": str(row.get("BroadcastName", row.get("Abbreviation", "???"))),
+                "Position": pos,
+                "Abbreviation": str(drv_acr).upper(),
+                "BroadcastName": str(drv_acr).upper(),
                 "BestLapTime": time_str,
             })
-        out.sort(key=lambda r: r["Position"])
-        return out[:3]
+        return out
     except Exception:
         logger.exception("FastF1 get_practice_sync failed")
         return []
