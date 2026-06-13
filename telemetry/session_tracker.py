@@ -464,9 +464,10 @@ class SessionTracker:
                 dn = int(rn_str)
             except ValueError:
                 continue
-            acr = (info.get("Tla") or rn_str).upper()
-            state.driver_map[dn]    = acr
-            state.acronym_to_dn[acr] = dn
+            acr = (info.get("Tla") or "").upper()
+            if acr:
+                state.driver_map[dn]    = acr
+                state.acronym_to_dn[acr] = dn
             if acr in DRIVERS:
                 state.team_map[dn] = DRIVERS[acr].get("team", "")
             elif info.get("TeamName") and dn not in state.team_map:
