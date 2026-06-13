@@ -101,6 +101,7 @@ def _persist_seen() -> None:
 # ── Bot application singleton ref (set in build_app) ──────────────────────────
 _app: Application | None = None
 _tracker = SessionTracker()
+_seen_restored: set[str] = set()  # session_keys for which seen events have been loaded
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -142,6 +143,7 @@ async def _send_voice(audio_bytes: bytes, caption: str) -> int | None:
 async def _on_session_start(session: dict) -> None:
     sk = session.get("session_key", "")
     if sk:
+        _seen_restored.add(str(sk))
         _restore_seen_to_state(str(sk))
     text = fmt_session_start(session)
     await _send(text)
@@ -379,6 +381,15 @@ async def _on_team_radio(
 # ── Job ────────────────────────────────────────────────────────────────────────
 
 async def job_poll(context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Restore persisted seen-events on first poll for any session (handles restarts
+    # mid-session when on_session_start may not fire due to scheduled time check)
+    state = _tracker.current_session
+    if state is not None and state.session_key != -1:
+        sk = str(state.session_key)
+        if sk not in _seen_restored:
+            _seen_restored.add(sk)
+            _restore_seen_to_state(sk)
+            logger.debug("Auto-restored seen events for session %s", sk)
     await _tracker.poll()
 
 
