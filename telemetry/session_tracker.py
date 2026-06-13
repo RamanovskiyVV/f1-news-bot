@@ -715,6 +715,8 @@ class SessionTracker:
     async def _process_session_status(self, data: dict, state: SessionState) -> None:
         status = data.get("Status", "")
         logger.debug("SessionStatus: %s", status)
-        if status in ("Ends", "Finalised", "Finished"):
+        # "Ends" fires at end of each Q segment (Q1/Q2) — do NOT trigger session end.
+        # Only "Finalised" / "Finished" mean the entire session is done.
+        if status in ("Finalised", "Finished"):
             logger.info("SessionStatus=%s -> triggering end", status)
             await self._trigger_session_end()
