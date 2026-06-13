@@ -11,6 +11,7 @@ from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from .config import (
+    RACING_NUMBER_TO_ACR,
     TELEMETRY_BOT_TOKEN,
     TELEMETRY_CHANNEL_ID,
     TELEMETRY_POLL_INTERVAL,
@@ -28,6 +29,7 @@ from .formatter import (
     fmt_session_start,
     fmt_team_radio,
 )
+from .livetiming_client import parse_lap_time
 from .radio_processor import process_radio
 from .schedule import get_schedule_message
 from .session_tracker import PRACTICE_SESSION_TYPES, SessionTracker
@@ -506,6 +508,10 @@ async def cmd_liveresults(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     session = state.session_doc
     sname = state.session_name
     dmap = dict(state.driver_map)
+
+    def _resolve(dn: int) -> str:
+        return dmap.get(dn) or RACING_NUMBER_TO_ACR.get(dn) or str(dn)
+
     is_fp    = any(sname.startswith(p) for p in ("Practice", "Free Practice", "FP"))
     is_race  = sname in ("Race", "Sprint")
     is_quali = "Qualifying" in sname
@@ -514,7 +520,7 @@ async def cmd_liveresults(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         sorted_laps = sorted(state.best_laps.items(), key=lambda x: x[1])
         results = []
         for pos, (dn, lap_secs) in enumerate(sorted_laps, 1):
-            acr = dmap.get(dn, str(dn))
+            acr = _resolve(dn)
             mins = int(lap_secs // 60)
             rem = lap_secs - mins * 60
             results.append({"Position": pos, "Abbreviation": acr, "BroadcastName": acr,
@@ -528,7 +534,7 @@ async def cmd_liveresults(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         sorted_pos = sorted(state.last_positions.items(), key=lambda x: x[1])
         results = []
         for dn, pos in sorted_pos:
-            acr = dmap.get(dn, str(dn))
+            acr = _resolve(dn)
             gap = state.race_gaps.get(dn, "")
             results.append({"Position": pos, "Abbreviation": acr, "BroadcastName": acr, "Time": gap})
         if results:
@@ -541,7 +547,7 @@ async def cmd_liveresults(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif is_quali and state.quali_q_times:
         q_results: dict[str, list] = {"Q3": [], "Q2": [], "Q1": []}
         for dn, qtimes in state.quali_q_times.items():
-            acr = dmap.get(dn, str(dn))
+            acr = _resolve(dn)
             for qlabel in ("Q3", "Q2", "Q1"):
                 t = qtimes.get(qlabel)
                 if t:
@@ -549,7 +555,8 @@ async def cmd_liveresults(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                                                "QualifyingTime": t})
                     break
         for qlabel in ("Q3", "Q2", "Q1"):
-            q_results[qlabel].sort(key=lambda r: r["QualifyingTime"])
+            # Sort by numeric seconds, fall back to string comparison
+            q_results[qlabel].sort(key=lambda r: parse_lap_time(r["QualifyingTime"]) or 9999)
         q_results = {k: v for k, v in q_results.items() if v}
         if q_results:
             await _send(fmt_qualifying_results(session, q_results))
