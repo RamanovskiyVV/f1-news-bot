@@ -285,8 +285,16 @@ async def _on_session_end(
                 _mark_sent(sk)
             return
 
-    # No live data available (bot was offline during session) -- silently skip.
-    # Use /results command to manually fetch from FastF1.
+    # No live data — try FastF1 (bot was offline or restarted after session)
+    logger.info("No live data for %s %s, trying FastF1 fallback",
+                session.get("meeting_name"), session.get("session_name"))
+    try:
+        sent = await _send_session_results(session)
+        if sent and sk:
+            _mark_sent(sk)
+    except Exception:
+        logger.exception("FastF1 fallback failed for %s %s",
+                         session.get("meeting_name"), session.get("session_name"))
 
 
 async def _retry_results_job(context: ContextTypes.DEFAULT_TYPE) -> None:
