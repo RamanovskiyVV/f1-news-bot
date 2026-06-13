@@ -371,7 +371,7 @@ class SessionTracker:
                 await self._process_pit_data(data, state)
             elif topic == "RaceControlMessages":
                 await self._process_rc_messages(data, state)
-            elif topic == "TeamRadio" and is_live:
+            elif topic == "TeamRadio":
                 await self._process_team_radio(data, state)
             elif topic == "SessionStatus":
                 await self._process_session_status(data, state)
