@@ -663,6 +663,24 @@ class SessionTracker:
                     driver_acr = state.driver_map.get(dn)
                 except (ValueError, TypeError):
                     pass
+            # Fallback: extract car number from message text e.g. "CAR 16 (LEC)" or "CAR 16"
+            if not driver_acr:
+                import re
+                m = re.search(r'\bCAR\s+(\d+)', text, re.IGNORECASE)
+                if m:
+                    try:
+                        dn = int(m.group(1))
+                        driver_acr = state.driver_map.get(dn)
+                    except (ValueError, TypeError):
+                        pass
+            # Fallback: extract acronym from parentheses e.g. "(LEC)"
+            if not driver_acr:
+                import re
+                m = re.search(r'\(([A-Z]{2,3})\)', text)
+                if m:
+                    driver_acr = m.group(1)
+            logger.debug("RC message raw: flag=%r scope=%r racing_number=%r driver=%r text=%r",
+                         flag, scope, racing_number, driver_acr, text)
             if self.on_race_control:
                 await self.on_race_control(
                     message=text,
