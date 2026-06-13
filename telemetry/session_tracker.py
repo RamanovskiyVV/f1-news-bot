@@ -552,6 +552,7 @@ class SessionTracker:
                             state.overall_fastest = lap_secs
                             state.overall_fastest_driver = dn
                             acr = _resolve_driver(dn, state.driver_map)
+                            if emit_events and self.on_fastest_lap:
                                 await self.on_fastest_lap(
                                     acronym=acr,
                                     lap_time=lap_secs,
