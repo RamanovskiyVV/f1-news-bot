@@ -378,6 +378,69 @@ async def cmd_results(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text(f"❌ Ошибка: {e}")
 
 
+async def cmd_liveresults(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send results from live SignalR data collected during the session."""
+    state = _tracker.current_session
+    if state is None:
+        await update.message.reply_text("❌ Нет активной сессии.")
+        return
+
+    session = state.session_doc
+    sname = state.session_name
+    dmap = dict(state.driver_map)
+    is_fp    = any(sname.startswith(p) for p in ("Practice", "Free Practice", "FP"))
+    is_race  = sname in ("Race", "Sprint")
+    is_quali = "Qualifying" in sname
+
+    if is_fp and state.best_laps:
+        sorted_laps = sorted(state.best_laps.items(), key=lambda x: x[1])
+        results = []
+        for pos, (dn, lap_secs) in enumerate(sorted_laps, 1):
+            acr = dmap.get(dn, str(dn))
+            mins = int(lap_secs // 60)
+            rem = lap_secs - mins * 60
+            results.append({"Position": pos, "Abbreviation": acr, "BroadcastName": acr,
+                             "BestLapTime": f"{mins}:{rem:06.3f}"})
+        if results:
+            await _send(fmt_practice_top3(session, results))
+            await update.message.reply_text("✅ Отправлено в канал.")
+            return
+
+    elif is_race and state.last_positions:
+        sorted_pos = sorted(state.last_positions.items(), key=lambda x: x[1])
+        results = []
+        for dn, pos in sorted_pos:
+            acr = dmap.get(dn, str(dn))
+            gap = state.race_gaps.get(dn, "")
+            results.append({"Position": pos, "Abbreviation": acr, "BroadcastName": acr, "Time": gap})
+        if results:
+            total_pits = sum(state.pit_counts.values())
+            pit_stats = {"total": total_pits} if total_pits else {}
+            await _send(fmt_race_results(session, results, pit_stats, []))
+            await update.message.reply_text("✅ Отправлено в канал.")
+            return
+
+    elif is_quali and state.quali_q_times:
+        q_results: dict[str, list] = {"Q3": [], "Q2": [], "Q1": []}
+        for dn, qtimes in state.quali_q_times.items():
+            acr = dmap.get(dn, str(dn))
+            for qlabel in ("Q3", "Q2", "Q1"):
+                t = qtimes.get(qlabel)
+                if t:
+                    q_results[qlabel].append({"Abbreviation": acr, "BroadcastName": acr,
+                                               "QualifyingTime": t})
+                    break
+        for qlabel in ("Q3", "Q2", "Q1"):
+            q_results[qlabel].sort(key=lambda r: r["QualifyingTime"])
+        q_results = {k: v for k, v in q_results.items() if v}
+        if q_results:
+            await _send(fmt_qualifying_results(session, q_results))
+            await update.message.reply_text("✅ Отправлено в канал.")
+            return
+
+    await update.message.reply_text("⚠️ Нет live данных в памяти. Используй /results для запроса через FastF1.")
+
+
 # ── App builder ────────────────────────────────────────────────────────────────
 
 def build_app() -> Application:
@@ -402,14 +465,16 @@ def build_app() -> Application:
     _app.add_handler(CommandHandler("status", cmd_status))
     _app.add_handler(CommandHandler("schedule", cmd_schedule))
     _app.add_handler(CommandHandler("results", cmd_results))
+    _app.add_handler(CommandHandler("liveresults", cmd_liveresults))
 
     # Telegram UI menu
     async def post_init(app):
         from telegram import BotCommand
         await app.bot.set_my_commands([
-            BotCommand("status",   "📡 Статус трекера и текущей сессии"),
-            BotCommand("schedule", "🗓 Расписание ближайшего уикенда"),
-            BotCommand("results",  "🏁 Запросить итоги последней сессии"),
+            BotCommand("status",      "📡 Статус трекера и текущей сессии"),
+            BotCommand("schedule",    "🗓 Расписание ближайшего уикенда"),
+            BotCommand("liveresults", "⚡ Результаты из live потока (мгновенно)"),
+            BotCommand("results",     "🏁 Результаты через FastF1 (если пропустил)"),
         ])
 
     _app.post_init = post_init
