@@ -219,12 +219,15 @@ async def _on_session_end(
     is_quali = "Qualifying" in sname
     dmap = driver_map or {}
 
+    def _resolve(dn: int) -> str:
+        return dmap.get(dn) or RACING_NUMBER_TO_ACR.get(dn) or str(dn)
+
     # ── Practice: instant from SignalR lap times ─────────────────────────────
     if is_fp and live_laps:
         sorted_laps = sorted(live_laps.items(), key=lambda x: x[1])
         results = []
         for pos, (dn, lap_secs) in enumerate(sorted_laps, 1):
-            acr = dmap.get(dn, str(dn))
+            acr = _resolve(dn)
             mins = int(lap_secs // 60)
             rem = lap_secs - mins * 60
             results.append({"Position": pos, "Abbreviation": acr, "BroadcastName": acr,
@@ -240,7 +243,7 @@ async def _on_session_end(
         sorted_pos = sorted(live_positions.items(), key=lambda x: x[1])
         results = []
         for dn, pos in sorted_pos:
-            acr = dmap.get(dn, str(dn))
+            acr = _resolve(dn)
             gap = (race_gaps or {}).get(dn, "")
             results.append({"Position": pos, "Abbreviation": acr, "BroadcastName": acr,
                              "Time": gap})
@@ -256,7 +259,7 @@ async def _on_session_end(
     if is_quali and quali_q_times:
         q_results: dict[str, list] = {"Q3": [], "Q2": [], "Q1": []}
         for dn, qtimes in quali_q_times.items():
-            acr = dmap.get(dn, str(dn))
+            acr = _resolve(dn)
             for qlabel in ("Q3", "Q2", "Q1"):
                 t = qtimes.get(qlabel)
                 if t:
@@ -264,7 +267,7 @@ async def _on_session_end(
                                                "QualifyingTime": t})
                     break  # assign driver to best (highest) Q segment only
         for qlabel in ("Q3", "Q2", "Q1"):
-            q_results[qlabel].sort(key=lambda r: r["QualifyingTime"])
+            q_results[qlabel].sort(key=lambda r: parse_lap_time(r["QualifyingTime"]) or 9999)
         q_results = {k: v for k, v in q_results.items() if v}
         if q_results:
             await _send(fmt_qualifying_results(session, q_results))
