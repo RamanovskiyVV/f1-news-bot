@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
+from pathlib import Path
 
 from telegram import Update
 from telegram.constants import ParseMode
@@ -31,6 +33,28 @@ from .schedule import get_schedule_message
 from .session_tracker import PRACTICE_SESSION_TYPES, SessionTracker
 
 logger = logging.getLogger(__name__)
+
+# ── Sent-results persistence ──────────────────────────────────────────────────
+_SENT_FILE = Path(__file__).parent.parent / "sent_results.json"
+
+def _load_sent() -> set:
+    try:
+        data = json.loads(_SENT_FILE.read_text())
+        if isinstance(data, list):
+            return set(data)
+    except Exception:
+        pass
+    return set()
+
+def _mark_sent(session_key) -> None:
+    keys = _load_sent()
+    keys.add(str(session_key))
+    # Keep only last 50
+    ordered = list(keys)[-50:]
+    _SENT_FILE.write_text(json.dumps(ordered))
+
+def _already_sent(session_key) -> bool:
+    return str(session_key) in _load_sent()
 
 # ── Bot application singleton ref (set in build_app) ──────────────────────────
 _app: Application | None = None
@@ -135,6 +159,11 @@ async def _on_session_end(
     if not session.get("meeting_name") or not session.get("session_name"):
         return
 
+    sk = session.get("session_key", "")
+    if sk and _already_sent(sk):
+        logger.info("Results for session %s already sent, skipping.", sk)
+        return
+
     sname = session.get("session_name", "")
     is_fp    = any(sname.startswith(p) for p in ("Practice", "Free Practice", "FP"))
     is_race  = sname in ("Race", "Sprint")
@@ -153,6 +182,8 @@ async def _on_session_end(
                              "BestLapTime": f"{mins}:{rem:06.3f}"})
         if results:
             await _send(fmt_practice_top3(session, results))
+            if sk:
+                _mark_sent(sk)
             return
 
     # ── Race / Sprint: instant from SignalR positions + gaps ─────────────────
@@ -168,6 +199,8 @@ async def _on_session_end(
             total_pits = sum((pit_counts or {}).values())
             pit_stats = {"total": total_pits} if total_pits else {}
             await _send(fmt_race_results(session, results, pit_stats, []))
+            if sk:
+                _mark_sent(sk)
             return
 
     # ── Qualifying: instant from SignalR Q1/Q2/Q3 times ─────────────────────
@@ -186,6 +219,8 @@ async def _on_session_end(
         q_results = {k: v for k, v in q_results.items() if v}
         if q_results:
             await _send(fmt_qualifying_results(session, q_results))
+            if sk:
+                _mark_sent(sk)
             return
 
     # No live data available (bot was offline during session) -- silently skip.
