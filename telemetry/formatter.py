@@ -46,7 +46,20 @@ def _separator(char: str = "─", n: int = 20) -> str:
     return char * n
 
 
-def _rc_emoji(message: str) -> str:
+def _rc_emoji(message: str, flag: str | None = None) -> str:
+    # Use explicit flag field first (more reliable than text matching)
+    if flag:
+        flag_upper = flag.upper()
+        if "RED" in flag_upper:
+            return "🚩"
+        if "YELLOW" in flag_upper:
+            return "🟡"
+        if "GREEN" in flag_upper:
+            return "🟢"
+        if "CHEQUERED" in flag_upper or "CHECKERED" in flag_upper:
+            return "🏁"
+        if "SAFETY" in flag_upper:
+            return "🚗"
     msg_upper = message.upper()
     for kw, emoji in RC_KEYWORDS.items():
         if kw in msg_upper:
@@ -153,11 +166,23 @@ def fmt_pit_stop(
     return "\n".join(lines)
 
 
-def fmt_race_control(message: str, lap_number: int | None, category: str | None) -> str:
-    emoji = _rc_emoji(message)
+def fmt_race_control(
+    message: str,
+    lap_number: int | None,
+    category: str | None,
+    flag: str | None = None,
+    driver: str | None = None,
+    scope: str | None = None,
+    sector: int | None = None,
+) -> str:
+    emoji = _rc_emoji(message, flag)
     lap_str = f"  ·  Круг {lap_number}" if lap_number else ""
-    cat_str = f"<i>{category}</i>\n" if category and category.upper() != "OTHER" else ""
-    return f"{emoji} <b>ДИРЕКЦИЯ</b>{lap_str}\n\n{cat_str}{message}"
+    cat_str = f"<i>{category}</i>\n" if category and category.upper() not in ("OTHER", "") else ""
+    driver_str = ""
+    if driver:
+        driver_str = f"\n👤 {driver_label(driver)}"
+    sector_str = f"  ·  Сектор {sector}" if sector else ""
+    return f"{emoji} <b>ДИРЕКЦИЯ</b>{lap_str}{sector_str}\n\n{cat_str}{message}{driver_str}"
 
 
 def fmt_team_radio(

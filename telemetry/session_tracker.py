@@ -642,19 +642,35 @@ class SessionTracker:
         for msg in items:
             if not isinstance(msg, dict):
                 continue
-            text     = msg.get("Message", "")
-            utc      = msg.get("Utc", "")
-            category = msg.get("Category", "")
-            lap      = msg.get("Lap")
+            text          = msg.get("Message", "")
+            utc           = msg.get("Utc", "")
+            category      = msg.get("Category", "")
+            lap           = msg.get("Lap")
+            flag          = msg.get("Flag", "")
+            racing_number = msg.get("RacingNumber", "")
+            scope         = msg.get("Scope", "")
+            sector        = msg.get("Sector")
             key = f"{utc}:{text}"
             if not text or key in state.seen_rc:
                 continue
             state.seen_rc.add(key)
+            # Resolve driver acronym from racing number
+            driver_acr = None
+            if racing_number:
+                try:
+                    dn = int(racing_number)
+                    driver_acr = state.driver_map.get(dn)
+                except (ValueError, TypeError):
+                    pass
             if self.on_race_control:
                 await self.on_race_control(
                     message=text,
                     lap_number=lap,
                     category=category,
+                    flag=flag,
+                    driver=driver_acr,
+                    scope=scope,
+                    sector=sector,
                 )
 
     # -- TeamRadio --------------------------------------------------------------

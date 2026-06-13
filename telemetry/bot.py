@@ -257,8 +257,12 @@ async def _on_race_control(
     message: str,
     lap_number: int | None,
     category: str | None,
+    flag: str | None = None,
+    driver: str | None = None,
+    scope: str | None = None,
+    sector: int | None = None,
 ) -> None:
-    text = fmt_race_control(message, lap_number, category)
+    text = fmt_race_control(message, lap_number, category, flag=flag, driver=driver, scope=scope, sector=sector)
     await _send(text)
 
 
