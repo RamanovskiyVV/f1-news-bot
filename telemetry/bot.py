@@ -56,6 +56,48 @@ def _mark_sent(session_key) -> None:
 def _already_sent(session_key) -> bool:
     return str(session_key) in _load_sent()
 
+# ── Seen-events persistence (dedup RC/radio/pits across restarts) ─────────────
+_SEEN_FILE = Path(__file__).parent.parent / "seen_events.json"
+
+def _load_seen(session_key: str) -> dict:
+    try:
+        data = json.loads(_SEEN_FILE.read_text())
+        if isinstance(data, dict) and data.get("session_key") == session_key:
+            return data
+    except Exception:
+        pass
+    return {"session_key": session_key, "rc": [], "radio": [], "pits": []}
+
+def _save_seen(session_key: str, rc: set, radio: set, pits: set) -> None:
+    _SEEN_FILE.write_text(json.dumps({
+        "session_key": session_key,
+        "rc":    list(rc),
+        "radio": list(radio),
+        "pits":  [list(p) for p in pits],
+    }))
+
+def _restore_seen_to_state(session_key: str) -> None:
+    """Load persisted seen sets into the tracker's current session state."""
+    state = _tracker.current_session
+    if state is None:
+        return
+    data = _load_seen(str(session_key))
+    state.seen_rc    |= set(data.get("rc", []))
+    state.seen_radio |= set(data.get("radio", []))
+    state.seen_pits  |= {tuple(p) for p in data.get("pits", [])}
+
+def _persist_seen() -> None:
+    """Persist current state's seen sets to disk."""
+    state = _tracker.current_session
+    if state is None or state.session_key == -1:
+        return
+    _save_seen(
+        str(state.session_key),
+        state.seen_rc,
+        state.seen_radio,
+        state.seen_pits,
+    )
+
 # ── Bot application singleton ref (set in build_app) ──────────────────────────
 _app: Application | None = None
 _tracker = SessionTracker()
@@ -98,6 +140,9 @@ async def _send_voice(audio_bytes: bytes, caption: str) -> int | None:
 # ── Event callbacks ────────────────────────────────────────────────────────────
 
 async def _on_session_start(session: dict) -> None:
+    sk = session.get("session_key", "")
+    if sk:
+        _restore_seen_to_state(str(sk))
     text = fmt_session_start(session)
     await _send(text)
 
@@ -286,6 +331,7 @@ async def _on_pit_stop(
 ) -> None:
     text = fmt_pit_stop(acronym, compound, pit_duration, lap_number, pit_count)
     await _send(text)
+    _persist_seen()
 
 
 async def _on_race_control(
@@ -299,6 +345,7 @@ async def _on_race_control(
 ) -> None:
     text = fmt_race_control(message, lap_number, category, flag=flag, driver=driver, scope=scope, sector=sector)
     await _send(text)
+    _persist_seen()
 
 
 async def _on_team_radio(
@@ -326,6 +373,7 @@ async def _on_team_radio(
     if voice_msg_id:
         kwargs["reply_to_message_id"] = voice_msg_id
     await _send(text, **kwargs)
+    _persist_seen()
 
 
 # ── Job ────────────────────────────────────────────────────────────────────────
