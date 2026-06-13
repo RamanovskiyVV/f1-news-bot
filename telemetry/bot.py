@@ -381,8 +381,32 @@ async def cmd_results(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def cmd_liveresults(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send results from live SignalR data collected during the session."""
     state = _tracker.current_session
-    if state is None:
-        await update.message.reply_text("❌ Нет активной сессии.")
+
+    # No state, or bootstrap placeholder (-1), or state has no live data
+    # → fall back to FastF1 same as /results
+    has_live = (
+        state is not None
+        and getattr(state, "session_key", -1) != -1
+        and (state.best_laps or state.last_positions or state.quali_q_times)
+    )
+
+    if not has_live:
+        # Try FastF1 fallback
+        if state is None or not state.session_doc or not state.session_doc.get("session_name"):
+            await update.message.reply_text("❌ Нет данных о сессии. Попробуй позже.")
+            return
+        await update.message.reply_text(
+            f"⚡ Live данных нет (бот был перезапущен). "
+            f"Запрашиваю через FastF1..."
+        )
+        try:
+            sent = await _send_session_results(state.session_doc)
+            if sent:
+                await update.message.reply_text("✅ Результаты отправлены в канал.")
+            else:
+                await update.message.reply_text("⚠️ FastF1 тоже не доступен. Попробуй позже.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка: {e}")
         return
 
     session = state.session_doc
@@ -438,7 +462,15 @@ async def cmd_liveresults(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await update.message.reply_text("✅ Отправлено в канал.")
             return
 
-    await update.message.reply_text("⚠️ Нет live данных в памяти. Используй /results для запроса через FastF1.")
+    await update.message.reply_text("⚠️ Нет live данных в памяти. Пробую FastF1...")
+    try:
+        sent = await _send_session_results(session)
+        if sent:
+            await update.message.reply_text("✅ Результаты отправлены через FastF1.")
+        else:
+            await update.message.reply_text("⚠️ FastF1 тоже не доступен. Попробуй позже.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
 
 
 # ── App builder ────────────────────────────────────────────────────────────────
