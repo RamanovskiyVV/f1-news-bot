@@ -105,13 +105,14 @@ class SessionTracker:
     Assign async callables to the on_* attributes before calling poll().
     """
 
-    on_session_start: EventCallback | None = None
-    on_session_end:   EventCallback | None = None
-    on_overtake:      EventCallback | None = None
-    on_fastest_lap:   EventCallback | None = None
-    on_pit_stop:      EventCallback | None = None
-    on_race_control:  EventCallback | None = None
-    on_team_radio:    EventCallback | None = None
+    on_session_start:    EventCallback | None = None
+    on_session_end:      EventCallback | None = None
+    on_session_restored: EventCallback | None = None  # fires on first session_key resolution (before any events)
+    on_overtake:         EventCallback | None = None
+    on_fastest_lap:      EventCallback | None = None
+    on_pit_stop:         EventCallback | None = None
+    on_race_control:     EventCallback | None = None
+    on_team_radio:       EventCallback | None = None
 
     def __init__(self) -> None:
         self._state: SessionState | None = None
@@ -441,6 +442,10 @@ class SessionTracker:
                 "SessionInfo received: %s -- %s (key=%s)",
                 meeting_name, session_name, session_key,
             )
+            # Fire on_session_restored immediately so seen events are loaded
+            # before any RC/pit/radio messages arrive from SignalR replay.
+            if is_bootstrap and self.on_session_restored:
+                await self.on_session_restored(session_key)
 
         # If this was a bootstrap and session is active, fire on_session_start
         if is_bootstrap and not state.ended:

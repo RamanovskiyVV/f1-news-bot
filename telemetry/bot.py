@@ -151,6 +151,16 @@ async def _on_session_start(session: dict) -> None:
     await _send(text)
 
 
+async def _on_session_restored(session_key: int) -> None:
+    """Called immediately when session_key is resolved from SignalR (before any RC/events).
+    Restores seen sets so replay spam is deduplicated."""
+    sk = str(session_key)
+    if sk not in _seen_restored:
+        _seen_restored.add(sk)
+        _restore_seen_to_state(sk)
+        logger.debug("on_session_restored: preloaded seen events for session %s", sk)
+
+
 async def _send_session_results(session: dict) -> bool:
     """Fetch and send FastF1 summary for the given session.
     Returns True if data was available and sent, False if no data yet."""
@@ -583,13 +593,14 @@ def build_app() -> Application:
     global _app
 
     # Wire tracker callbacks
-    _tracker.on_session_start = _on_session_start
-    _tracker.on_session_end   = _on_session_end
-    _tracker.on_overtake      = _on_overtake
-    _tracker.on_fastest_lap   = _on_fastest_lap
-    _tracker.on_pit_stop      = _on_pit_stop
-    _tracker.on_race_control  = _on_race_control
-    _tracker.on_team_radio    = _on_team_radio
+    _tracker.on_session_start    = _on_session_start
+    _tracker.on_session_restored = _on_session_restored
+    _tracker.on_session_end      = _on_session_end
+    _tracker.on_overtake         = _on_overtake
+    _tracker.on_fastest_lap      = _on_fastest_lap
+    _tracker.on_pit_stop         = _on_pit_stop
+    _tracker.on_race_control     = _on_race_control
+    _tracker.on_team_radio       = _on_team_radio
 
     _app = (
         Application.builder()
