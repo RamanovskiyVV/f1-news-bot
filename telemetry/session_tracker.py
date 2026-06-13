@@ -19,7 +19,12 @@ from typing import Any, Awaitable, Callable
 
 from .livetiming_client import AUDIO_BASE, LiveTimingClient, parse_lap_time
 from .openf1_client import OpenF1Client
-from .config import DRIVERS
+from .config import DRIVERS, RACING_NUMBER_TO_ACR
+
+
+def _resolve_driver(dn: int, driver_map: dict) -> str:
+    """Resolve driver acronym from driver_map, falling back to RACING_NUMBER_TO_ACR."""
+    return driver_map.get(dn) or RACING_NUMBER_TO_ACR.get(dn) or str(dn)
 
 logger = logging.getLogger(__name__)
 
@@ -546,8 +551,7 @@ class SessionTracker:
                         ):
                             state.overall_fastest = lap_secs
                             state.overall_fastest_driver = dn
-                            acr = state.driver_map.get(dn, str(dn))
-                            if emit_events and self.on_fastest_lap:
+                            acr = _resolve_driver(dn, state.driver_map)
                                 await self.on_fastest_lap(
                                     acronym=acr,
                                     lap_time=lap_secs,
@@ -568,8 +572,8 @@ class SessionTracker:
                             continue
                         other_old = old.get(other_dn, other_new_pos)
                         if other_old == new_pos and other_new_pos == old_pos:
-                            overtaker = state.driver_map.get(dn, str(dn))
-                            overtaken  = state.driver_map.get(other_dn, str(other_dn))
+                            overtaker = _resolve_driver(dn, state.driver_map)
+                            overtaken  = _resolve_driver(other_dn, state.driver_map)
                             if self.on_overtake:
                                 await self.on_overtake(
                                     overtaker=overtaker,
@@ -618,7 +622,7 @@ class SessionTracker:
 
             compound = state.current_tyre.get(rn_str, "UNKNOWN")
             state.pit_counts[dn] = state.pit_counts.get(dn, 0) + 1
-            acr = state.driver_map.get(dn, str(dn))
+            acr = _resolve_driver(dn, state.driver_map)
 
             if self.on_pit_stop:
                 await self.on_pit_stop(
@@ -660,7 +664,7 @@ class SessionTracker:
             if racing_number:
                 try:
                     dn = int(racing_number)
-                    driver_acr = state.driver_map.get(dn)
+                    driver_acr = _resolve_driver(dn, state.driver_map)
                 except (ValueError, TypeError):
                     pass
             # Fallback: extract car number from message text e.g. "CAR 16 (LEC)" or "CAR 16"
@@ -670,7 +674,7 @@ class SessionTracker:
                 if m:
                     try:
                         dn = int(m.group(1))
-                        driver_acr = state.driver_map.get(dn)
+                        driver_acr = _resolve_driver(dn, state.driver_map)
                     except (ValueError, TypeError):
                         pass
             # Fallback: extract acronym from parentheses e.g. "(LEC)"
@@ -717,7 +721,7 @@ class SessionTracker:
                 dn = int(rn_str)
             except (ValueError, TypeError):
                 dn = None
-            acr = state.driver_map.get(dn, rn_str) if dn else rn_str
+            acr = _resolve_driver(dn, state.driver_map) if dn else rn_str
             utc = capture.get("Utc", "")
 
             if self.on_team_radio:

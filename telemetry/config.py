@@ -101,6 +101,33 @@ RC_KEYWORDS: dict[str, str] = {
 
 POSITION_MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
 
+# Racing number → acronym fallback (used when DriverList not yet received)
+RACING_NUMBER_TO_ACR: dict[int, str] = {
+    1:  "VER",
+    4:  "NOR",
+    16: "LEC",
+    81: "PIA",
+    55: "SAI",
+    44: "HAM",
+    63: "RUS",
+    12: "ANT",
+    14: "ALO",
+    18: "STR",
+    10: "GAS",
+    7:  "DOO",
+    22: "TSU",
+    30: "LAW",
+    6:  "HAD",
+    27: "HUL",
+    5:  "BOR",
+    23: "ALB",
+    31: "OCO",
+    87: "BEA",
+    11: "PER",
+    77: "BOT",
+    43: "COL",
+}
+
 
 def driver_label(acronym: str, *, with_flag: bool = True) -> str:
     """Return e.g. '🇳🇱 VER' or just 'VER'."""
