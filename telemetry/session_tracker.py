@@ -84,6 +84,10 @@ class SessionState:
     seen_radio: set[str] = field(default_factory=set)
     # {driver_number: total pit count}
     pit_counts: dict[int, int] = field(default_factory=dict)
+    # {driver_number: monotonic_timestamp} — drivers who pitted recently (suppress fake overtakes for 60s)
+    recently_pitted: dict[int, float] = field(default_factory=dict)
+    # {driver_number: stint_count} — for pit detection via TimingAppData
+    _stint_counts: dict[int, int] = field(default_factory=dict)
     # {driver_number(int): acronym(str)} -- built from DriverList
     driver_map: dict[int, str] = field(default_factory=dict)
     # {driver_number(int): team_key(str)}
@@ -370,7 +374,7 @@ class SessionTracker:
             elif topic == "DriverList":
                 self._process_driver_list(data, state)
             elif topic == "TimingAppData":
-                self._process_timing_app_data(data, state)
+                await self._process_timing_app_data(data, state, emit_events=is_live)
             elif topic == "TimingData":
                 await self._process_timing_data(data, state, emit_events=is_live)
             elif topic == "PitLaneTimeCollection" and is_live:
@@ -483,22 +487,57 @@ class SessionTracker:
             elif info.get("TeamName") and dn not in state.team_map:
                 state.team_map[dn] = info["TeamName"]
 
-    # -- TimingAppData (tyres) --------------------------------------------------
+    # -- TimingAppData (tyres + pit detection via stint count) ------------------
 
-    def _process_timing_app_data(self, data: dict, state: SessionState) -> None:
+    async def _process_timing_app_data(self, data: dict, state: SessionState, emit_events: bool = True) -> None:
         lines = data.get("Lines", {})
         if not isinstance(lines, dict):
             return
         for rn_str, info in lines.items():
             if not isinstance(info, dict):
                 continue
+            try:
+                dn = int(rn_str)
+            except ValueError:
+                continue
+
             stints = info.get("Stints", {})
             if isinstance(stints, dict):
                 stints = list(stints.values())
-            if isinstance(stints, list) and stints:
-                compound = stints[-1].get("Compound", "")
-                if compound:
-                    state.current_tyre[rn_str] = compound.upper()
+            if not isinstance(stints, list) or not stints:
+                continue
+
+            last_stint = stints[-1]
+            compound = last_stint.get("Compound", "")
+            if compound:
+                state.current_tyre[rn_str] = compound.upper()
+
+            # Pit detection: new stint appeared = driver pitted
+            stint_count = len(stints)
+            prev_count = state._stint_counts.get(dn, 0)
+            if stint_count > prev_count and prev_count > 0 and emit_events:
+                # New stint = completed pit stop
+                import time as _time
+                state.recently_pitted[dn] = _time.monotonic()
+                lap = last_stint.get("LapNumber") or last_stint.get("StartLaps")
+                try:
+                    lap = int(lap) if lap is not None else None
+                except (TypeError, ValueError):
+                    lap = None
+                key = (dn, lap)
+                if key not in state.seen_pits:
+                    state.seen_pits.add(key)
+                    state.pit_counts[dn] = state.pit_counts.get(dn, 0) + 1
+                    acr = _resolve_driver(dn, state.driver_map)
+                    if self.on_pit_stop:
+                        await self.on_pit_stop(
+                            acronym=acr,
+                            compound=compound.upper() if compound else "UNKNOWN",
+                            pit_duration=None,
+                            lap_number=lap,
+                            pit_count=state.pit_counts[dn],
+                        )
+            state._stint_counts[dn] = stint_count
 
     # -- TimingData: positions + fastest laps -----------------------------------
 
@@ -567,6 +606,12 @@ class SessionTracker:
 
         # Overtake detection
         if new_positions:
+            import time as _time
+            now = _time.monotonic()
+            # Clear recently_pitted entries older than 60s (position shuffle should be done)
+            state.recently_pitted = {dn: ts for dn, ts in state.recently_pitted.items()
+                                      if now - ts < 60}
+
             old = state.last_positions
             if old:
                 for dn, new_pos in new_positions.items():
@@ -578,6 +623,9 @@ class SessionTracker:
                             continue
                         other_old = old.get(other_dn, other_new_pos)
                         if other_old == new_pos and other_new_pos == old_pos:
+                            # Suppress if either driver recently pitted (position swap is pit-caused)
+                            if dn in state.recently_pitted or other_dn in state.recently_pitted:
+                                break
                             overtaker = _resolve_driver(dn, state.driver_map)
                             overtaken  = _resolve_driver(other_dn, state.driver_map)
                             if self.on_overtake:
@@ -600,7 +648,7 @@ class SessionTracker:
         for rn_str, info in pit_times.items():
             if not isinstance(info, dict):
                 continue
-            if info.get("InProgress", True):
+            if info.get("InProgress", False):
                 continue
             try:
                 dn = int(rn_str)
@@ -629,6 +677,9 @@ class SessionTracker:
             compound = state.current_tyre.get(rn_str, "UNKNOWN")
             state.pit_counts[dn] = state.pit_counts.get(dn, 0) + 1
             acr = _resolve_driver(dn, state.driver_map)
+            # Mark as recently pitted to suppress fake overtake events for 60s
+            import time as _time
+            state.recently_pitted[dn] = _time.monotonic()
 
             if self.on_pit_stop:
                 await self.on_pit_stop(
