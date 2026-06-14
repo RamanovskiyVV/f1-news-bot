@@ -22,11 +22,13 @@ OPENF1_BASE_URL = "https://api.openf1.org/v1"
 # Get it once via: python -c "from fastf1.internals.f1auth import get_auth_token; get_auth_token()"
 F1_SUBSCRIPTION_TOKEN = os.getenv("F1_SUBSCRIPTION_TOKEN", "")
 
-# CloudFront cookies for F1TV Pro (required for TeamRadio MP3 downloads)
-# Get them via: python get_cf_cookies.py  (see instructions in that file)
-CF_POLICY     = os.getenv("CF_POLICY", "")
-CF_SIGNATURE  = os.getenv("CF_SIGNATURE", "")
+# F1TV session cookies for TeamRadio MP3 downloads (F1TV Pro required)
+# Get them via: python get_cf_cookies.py  (F12 → Application → Cookies → formula1.com)
+CF_POLICY      = os.getenv("CF_POLICY", "")
+CF_SIGNATURE   = os.getenv("CF_SIGNATURE", "")
 CF_KEY_PAIR_ID = os.getenv("CF_KEY_PAIR_ID", "")
+F1_COOKIE_LOGIN_SESSION    = os.getenv("F1_COOKIE_LOGIN_SESSION", "")
+F1_COOKIE_ENTITLEMENT_TOKEN = os.getenv("F1_COOKIE_ENTITLEMENT_TOKEN", "")
 
 # ── Driver metadata ────────────────────────────────────────────────────────────
 # flag emoji, full name, team key

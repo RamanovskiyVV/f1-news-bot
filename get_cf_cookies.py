@@ -1,19 +1,74 @@
 """
-Script to test and save CloudFront cookies for F1 radio downloads.
+Script to test F1TV auth cookies for radio downloads.
 
 HOW TO GET THE COOKIES:
-1. Open Chrome/Edge
-2. Go to https://www.formula1.com and make sure you're logged in (F1TV Pro)
-3. Press F12 → Application tab → Cookies → https://www.formula1.com
-4. Copy the values for:
-   - CloudFront-Policy
-   - CloudFront-Signature
-   - CloudFront-Key-Pair-Id
-5. Paste them below or run this script and enter them when prompted
+1. Open Chrome/Edge, go to https://www.formula1.com (must be logged into F1TV Pro)
+2. Press F12 → Application → Cookies → https://www.formula1.com
+3. Copy values for:
+   - login-session
+   - entitlement_token
 
-OR try automated extraction (may require running as admin):
-  python get_cf_cookies.py --auto
+Run: python get_cf_cookies.py
 """
+import os
+import requests
+
+
+def test_cookies(login_session: str, entitlement_token: str, token: str) -> bool:
+    url = "https://livetiming.formula1.com/TeamRadio/COL_43_20260614_153044.mp3"
+    
+    combos = [
+        ("login-session only", {"login-session": login_session}, {}),
+        ("entitlement_token only", {"entitlement_token": entitlement_token}, {}),
+        ("both cookies", {"login-session": login_session, "entitlement_token": entitlement_token}, {}),
+        ("both + bearer", {"login-session": login_session, "entitlement_token": entitlement_token}, {"Authorization": f"Bearer {token}"}),
+        ("entitlement as bearer", {}, {"Authorization": f"Bearer {entitlement_token}"}),
+    ]
+    
+    for name, cookies, headers in combos:
+        r = requests.get(url, cookies=cookies, headers=headers, timeout=10)
+        print(f"  {name}: HTTP {r.status_code} ({len(r.content)} bytes)")
+        if r.status_code == 200:
+            print(f"  ✅ SUCCESS with: {name}")
+            return name, cookies, headers
+    return None
+
+
+def save_to_env(key: str, value: str):
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    with open(env_path, "rb") as f:
+        content = f.read().decode("utf-8", errors="ignore")
+    lines = [l for l in content.splitlines() if not l.startswith(key + "=")]
+    lines.append(f"{key}={value}")
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+if __name__ == "__main__":
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    with open(env_path, "rb") as f:
+        env_content = f.read().decode("utf-8", errors="ignore")
+    token = next((l.split("=", 1)[1].strip() for l in env_content.split("\n") if "F1_SUBSCRIPTION_TOKEN" in l), "")
+
+    print("Enter cookies from F1TV (F12 → Application → Cookies → formula1.com):\n")
+    login_session = input("login-session value: ").strip()
+    entitlement_token = input("entitlement_token value: ").strip()
+
+    print("\nTesting combinations...")
+    result = test_cookies(login_session, entitlement_token, token)
+
+    if result:
+        name, cookies, headers = result
+        print(f"\n✅ Works! Saving to .env...")
+        for k, v in cookies.items():
+            env_key = k.upper().replace("-", "_")
+            save_to_env(f"F1_COOKIE_{env_key}", v)
+        print("Done! Now run: scp -i ~/.ssh/f1-bot-key.pem .env ec2-user@54.204.247.143:/home/ec2-user/f1-news-bot/.env")
+        print("Then: ssh -i ~/.ssh/f1-bot-key.pem ec2-user@54.204.247.143 'sudo systemctl restart f1-telemetry-bot'")
+    else:
+        print("\n❌ None worked. F1TV Pro radio files may only be accessible via the browser with active session.")
+        print("Try: open the F1TV player and watch something first, then copy cookies again.")
+
 import sys
 import os
 import requests
