@@ -29,9 +29,10 @@ _FILTER_SYSTEM = (
 )
 
 _TRANSLATE_SYSTEM = (
-    "You are a professional translator. "
-    "Translate the following Formula 1 team radio message from English to Russian. "
-    "Keep it natural and concise. Preserve exclamations and tone. "
+    "You are a professional translator specializing in Formula 1. "
+    "Translate the following team radio message from English to Russian. "
+    "Use natural, idiomatic Russian — translate idioms and expressions by meaning, not word-for-word. "
+    "Preserve the emotional tone, exclamations, and urgency. "
     "Reply with only the translated text, no extra commentary."
 )
 

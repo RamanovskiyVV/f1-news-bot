@@ -388,8 +388,7 @@ async def _on_team_radio(
     team_name = TEAM_NAMES.get(d["team"], "") if d else ""
 
     # Send voice first
-    flag = d["flag"] if d else ""
-    voice_caption = f"📻 <b>TEAM RADIO</b>  ·  {flag} {acronym}" + (f"  ·  <i>{team_name}</i>" if team_name else "")
+    voice_caption = f"📻 <b>TEAM RADIO</b>  ·  {acronym}" + (f"  ·  <i>{team_name}</i>" if team_name else "")
     voice_msg_id = await _send_voice(result["audio_bytes"], voice_caption)
 
     # Then send text with translation as reply to the voice

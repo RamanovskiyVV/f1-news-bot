@@ -199,11 +199,11 @@ def fmt_team_radio(
     lines = [
         f"📻 <b>TEAM RADIO</b>{lap_str}",
         "",
-        f"{driver_label(acronym)}{team_str}",
+        f"{driver_label(acronym, with_flag=False)}{team_str}",
         "",
-        f'🇬🇧 <i>"{original_text}"</i>',
+        f'🎙 <i>"{original_text}"</i>',
         "",
-        f'🇷🇺 <i>«{translated_text}»</i>',
+        f'💬 <i>«{translated_text}»</i>',
     ]
     return "\n".join(lines)
 
