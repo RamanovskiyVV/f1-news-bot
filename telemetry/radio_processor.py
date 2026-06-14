@@ -7,7 +7,7 @@ import logging
 import httpx
 from openai import AsyncOpenAI
 
-from .config import OPENAI_API_KEY, OPENAI_FILTER_MODEL, OPENAI_WHISPER_MODEL
+from .config import OPENAI_API_KEY, OPENAI_FILTER_MODEL, OPENAI_WHISPER_MODEL, F1_SUBSCRIPTION_TOKEN
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +72,11 @@ async def process_radio(
 
 async def _download_audio(url: str) -> bytes | None:
     try:
+        headers = {}
+        if F1_SUBSCRIPTION_TOKEN:
+            headers["Authorization"] = f"Bearer {F1_SUBSCRIPTION_TOKEN}"
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.get(url)
+            r = await client.get(url, headers=headers)
             r.raise_for_status()
             return r.content
     except Exception as e:
