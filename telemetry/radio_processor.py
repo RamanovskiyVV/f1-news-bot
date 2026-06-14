@@ -84,6 +84,11 @@ async def _download_audio(url: str) -> bytes | None:
             headers["Authorization"] = f"Bearer {F1_SUBSCRIPTION_TOKEN}"
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.get(url, headers=headers)
+            if r.status_code == 403:
+                # F1 radio files require paid F1TV subscription (CloudFront signed cookies).
+                # Free Access token is not sufficient — log at debug level only.
+                logger.debug("Radio 403 (requires F1TV paid subscription): %s", url.split("/")[-1])
+                return None
             r.raise_for_status()
             if len(r.content) > _MAX_AUDIO_BYTES:
                 logger.warning("Radio file too large (%d bytes), skipping: %s", len(r.content), url)
