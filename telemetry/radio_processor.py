@@ -8,7 +8,7 @@ import logging
 import httpx
 from openai import AsyncOpenAI
 
-from .config import OPENAI_API_KEY, OPENAI_FILTER_MODEL, OPENAI_WHISPER_MODEL, F1_SUBSCRIPTION_TOKEN, CF_POLICY, CF_SIGNATURE, CF_KEY_PAIR_ID, F1_COOKIE_LOGIN_SESSION, F1_COOKIE_ENTITLEMENT_TOKEN
+from .config import OPENAI_API_KEY, OPENAI_FILTER_MODEL, OPENAI_WHISPER_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -79,30 +79,10 @@ async def process_radio(
 
 async def _download_audio(url: str) -> bytes | None:
     try:
-        headers = {}
-        cookies = {}
-        if F1_SUBSCRIPTION_TOKEN:
-            headers["Authorization"] = f"Bearer {F1_SUBSCRIPTION_TOKEN}"
-        # CloudFront signed cookies (if available)
-        if CF_POLICY and CF_SIGNATURE and CF_KEY_PAIR_ID:
-            cookies.update({
-                "CloudFront-Policy":      CF_POLICY,
-                "CloudFront-Signature":   CF_SIGNATURE,
-                "CloudFront-Key-Pair-Id": CF_KEY_PAIR_ID,
-            })
-        # F1TV session cookies (from browser, formula1.com)
-        if F1_COOKIE_LOGIN_SESSION:
-            cookies["login-session"] = F1_COOKIE_LOGIN_SESSION
-        if F1_COOKIE_ENTITLEMENT_TOKEN:
-            cookies["entitlement_token"] = F1_COOKIE_ENTITLEMENT_TOKEN
-
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.get(url, headers=headers, cookies=cookies)
+            r = await client.get(url)
             if r.status_code == 403:
-                if not cookies:
-                    logger.debug("Radio 403 (need F1TV Pro cookies — run get_cf_cookies.py): %s", url.split("/")[-1])
-                else:
-                    logger.warning("Radio 403 even with session cookies (expired?): %s", url.split("/")[-1])
+                logger.warning("Radio 403 (URL may be wrong, missing session_path?): %s", url)
                 return None
             r.raise_for_status()
             if len(r.content) > _MAX_AUDIO_BYTES:

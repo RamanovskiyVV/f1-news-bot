@@ -88,6 +88,8 @@ class SessionState:
     recently_pitted: dict[int, float] = field(default_factory=dict)
     # {driver_number: stint_count} — for pit detection via TimingAppData
     _stint_counts: dict[int, int] = field(default_factory=dict)
+    # Static path for this session (from SessionInfo.Path) e.g. "2026/2026-06-14_Barcelona_Grand_Prix/2026-06-14_Race/"
+    session_path: str = ""
     # {driver_number(int): acronym(str)} -- built from DriverList
     driver_map: dict[int, str] = field(default_factory=dict)
     # {driver_number(int): team_key(str)}
@@ -429,12 +431,16 @@ class SessionTracker:
 
         is_bootstrap = (state.session_key == -1)
 
+        session_path = data.get("Path", "")  # e.g. "2026/2026-06-14_Barcelona_Grand_Prix/2026-06-14_Race/"
+
         # Update bootstrap state with real values
         if is_bootstrap or state.session_key != session_key:
             state.session_key  = session_key
             state.session_name = session_name
             state.meeting_name = meeting_name
             state.meeting_key  = meeting_key
+            if session_path:
+                state.session_path = session_path
             if utc_start:
                 state.session_doc["date_start"] = utc_start
                 state.session_doc["session_key"] = session_key
@@ -768,7 +774,12 @@ class SessionTracker:
             path = capture.get("Path", "")
             if not path:
                 continue
-            url = AUDIO_BASE + path
+            # Build correct URL: base + "static/" + session_path + path
+            # e.g. https://livetiming.formula1.com/static/2026/.../TeamRadio/file.mp3
+            if state.session_path and not path.startswith("static/"):
+                url = AUDIO_BASE + "static/" + state.session_path + path
+            else:
+                url = AUDIO_BASE + path
             if url in state.seen_radio:
                 continue
             state.seen_radio.add(url)
