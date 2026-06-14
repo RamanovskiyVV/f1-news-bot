@@ -387,16 +387,9 @@ async def _on_team_radio(
     d = DRIVERS.get(acronym.upper())
     team_name = TEAM_NAMES.get(d["team"], "") if d else ""
 
-    # Send voice first
-    voice_caption = f"📻 <b>TEAM RADIO</b>  ·  {acronym}" + (f"  ·  <i>{team_name}</i>" if team_name else "")
-    voice_msg_id = await _send_voice(result["audio_bytes"], voice_caption)
-
-    # Then send text with translation as reply to the voice
-    text = fmt_team_radio(acronym, result["original"], result["translated"], team=team_name)
-    kwargs = {}
-    if voice_msg_id:
-        kwargs["reply_to_message_id"] = voice_msg_id
-    await _send(text, **kwargs)
+    # Send voice with full caption (original + translation in one message)
+    caption = fmt_team_radio(acronym, result["original"], result["translated"], team=team_name)
+    await _send_voice(result["audio_bytes"], caption)
     _persist_seen()
 
 
