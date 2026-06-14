@@ -8,7 +8,7 @@ import logging
 import httpx
 from openai import AsyncOpenAI
 
-from .config import OPENAI_API_KEY, OPENAI_FILTER_MODEL, OPENAI_WHISPER_MODEL, F1_SUBSCRIPTION_TOKEN
+from .config import OPENAI_API_KEY, OPENAI_FILTER_MODEL, OPENAI_WHISPER_MODEL, F1_SUBSCRIPTION_TOKEN, CF_POLICY, CF_SIGNATURE, CF_KEY_PAIR_ID
 
 logger = logging.getLogger(__name__)
 
@@ -80,14 +80,23 @@ async def process_radio(
 async def _download_audio(url: str) -> bytes | None:
     try:
         headers = {}
+        cookies = {}
         if F1_SUBSCRIPTION_TOKEN:
             headers["Authorization"] = f"Bearer {F1_SUBSCRIPTION_TOKEN}"
+        # CloudFront signed cookies (F1TV Pro) — required for MP3 access
+        if CF_POLICY and CF_SIGNATURE and CF_KEY_PAIR_ID:
+            cookies = {
+                "CloudFront-Policy":     CF_POLICY,
+                "CloudFront-Signature":  CF_SIGNATURE,
+                "CloudFront-Key-Pair-Id": CF_KEY_PAIR_ID,
+            }
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.get(url, headers=headers)
+            r = await client.get(url, headers=headers, cookies=cookies)
             if r.status_code == 403:
-                # F1 radio files require paid F1TV subscription (CloudFront signed cookies).
-                # Free Access token is not sufficient — log at debug level only.
-                logger.debug("Radio 403 (requires F1TV paid subscription): %s", url.split("/")[-1])
+                if not cookies:
+                    logger.debug("Radio 403 (requires F1TV Pro CloudFront cookies): %s", url.split("/")[-1])
+                else:
+                    logger.warning("Radio 403 even with CloudFront cookies (expired?): %s", url.split("/")[-1])
                 return None
             r.raise_for_status()
             if len(r.content) > _MAX_AUDIO_BYTES:
