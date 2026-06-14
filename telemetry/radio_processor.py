@@ -1,6 +1,7 @@
 """Team radio pipeline: download → Whisper transcription → GPT-mini filter → translate."""
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 
@@ -12,6 +13,11 @@ from .config import OPENAI_API_KEY, OPENAI_FILTER_MODEL, OPENAI_WHISPER_MODEL, F
 logger = logging.getLogger(__name__)
 
 _client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+# Max concurrent radio jobs (prevents burst API calls on replay/reconnect)
+_semaphore = asyncio.Semaphore(3)
+# Max audio file size to download (2 MB — typical clip is 100-400 KB)
+_MAX_AUDIO_BYTES = 2 * 1024 * 1024
 
 _FILTER_SYSTEM = (
     "You are a Formula 1 team radio analyst. "
@@ -45,29 +51,30 @@ async def process_radio(
         }
         or None if not interesting / download failed.
     """
-    # 1. Download audio
-    audio_bytes = await _download_audio(recording_url)
-    if not audio_bytes:
-        return None
+    async with _semaphore:
+        # 1. Download audio
+        audio_bytes = await _download_audio(recording_url)
+        if not audio_bytes:
+            return None
 
-    # 2. Transcribe via Whisper
-    original = await _transcribe(audio_bytes, filename="radio.mp3")
-    if not original or len(original.strip()) < 3:
-        return None
+        # 2. Transcribe via Whisper (~$0.006/min, typical clip ≈ 20s ≈ $0.002)
+        original = await _transcribe(audio_bytes, filename="radio.mp3")
+        if not original or len(original.strip()) < 3:
+            return None
 
-    # 3. Filter via GPT-mini
-    if not await _is_interesting(original, acronym):
-        logger.debug("Radio skipped (not interesting): %s — %s", acronym, original[:60])
-        return None
+        # 3. Filter via GPT-mini (fractions of a cent per call)
+        if not await _is_interesting(original, acronym):
+            logger.debug("Radio skipped (not interesting): %s — %s", acronym, original[:60])
+            return None
 
-    # 4. Translate
-    translated = await _translate(original)
+        # 4. Translate
+        translated = await _translate(original)
 
-    return {
-        "original": original.strip(),
-        "translated": translated.strip(),
-        "audio_bytes": audio_bytes,
-    }
+        return {
+            "original": original.strip(),
+            "translated": translated.strip(),
+            "audio_bytes": audio_bytes,
+        }
 
 
 async def _download_audio(url: str) -> bytes | None:
@@ -78,6 +85,9 @@ async def _download_audio(url: str) -> bytes | None:
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.get(url, headers=headers)
             r.raise_for_status()
+            if len(r.content) > _MAX_AUDIO_BYTES:
+                logger.warning("Radio file too large (%d bytes), skipping: %s", len(r.content), url)
+                return None
             return r.content
     except Exception as e:
         logger.warning("Failed to download radio audio: %s", e)
