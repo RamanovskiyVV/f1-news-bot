@@ -26,6 +26,46 @@ def _resolve_driver(dn: int, driver_map: dict) -> str:
     """Resolve driver acronym from driver_map, falling back to RACING_NUMBER_TO_ACR."""
     return driver_map.get(dn) or RACING_NUMBER_TO_ACR.get(dn) or str(dn)
 
+
+async def _fetch_session_path(session_key: int) -> str:
+    """Fetch static session path from F1 livetiming Index.json (no auth required)."""
+    import httpx
+    from datetime import datetime, timezone
+    year = datetime.now(timezone.utc).year
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(f"https://livetiming.formula1.com/static/{year}/Index.json")
+            if r.status_code != 200:
+                return ""
+            import json
+            data = json.loads(r.content.decode("utf-8-sig"))
+            for meeting in data.get("Meetings", []):
+                for session in meeting.get("Sessions", []):
+                    if session.get("Key") == session_key:
+                        path = session.get("Path", "")
+                        if path:
+                            return path
+                        # Path is empty for the live session — construct it from meeting path
+                        # Find any sibling session that has a path to derive the meeting folder
+                        meeting_path = ""
+                        for sibling in meeting.get("Sessions", []):
+                            p = sibling.get("Path", "")
+                            if p:
+                                # e.g. "2026/2026-06-14_Barcelona_Grand_Prix/2026-06-13_Qualifying/"
+                                # strip last segment to get meeting folder
+                                parts = p.rstrip("/").rsplit("/", 1)
+                                if len(parts) == 2:
+                                    meeting_path = parts[0] + "/"
+                                break
+                        if meeting_path:
+                            # Build session folder from date and name
+                            start = session.get("StartDate", "")[:10]  # "2026-06-14"
+                            name = session.get("Name", "Race").replace(" ", "_")
+                            return f"{meeting_path}{start}_{name}/"
+    except Exception as exc:
+        logger.debug("_fetch_session_path error: %s", exc)
+    return ""
+
 logger = logging.getLogger(__name__)
 
 EventCallback = Callable[..., Awaitable[None]]
@@ -432,6 +472,7 @@ class SessionTracker:
         is_bootstrap = (state.session_key == -1)
 
         session_path = data.get("Path", "")  # e.g. "2026/2026-06-14_Barcelona_Grand_Prix/2026-06-14_Race/"
+        logger.debug("SessionInfo Path from SignalR: %r", session_path)
 
         # Update bootstrap state with real values
         if is_bootstrap or state.session_key != session_key:
@@ -441,6 +482,13 @@ class SessionTracker:
             state.meeting_key  = meeting_key
             if session_path:
                 state.session_path = session_path
+                logger.info("session_path set from SignalR: %s", session_path)
+            else:
+                # Live race path is often empty in SignalR — fetch from static index
+                fetched = await _fetch_session_path(session_key)
+                if fetched:
+                    state.session_path = fetched
+                    logger.info("session_path fetched from static index: %s", fetched)
             if utc_start:
                 state.session_doc["date_start"] = utc_start
                 state.session_doc["session_key"] = session_key
