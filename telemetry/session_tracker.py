@@ -128,6 +128,8 @@ class SessionState:
     recently_pitted: dict[int, float] = field(default_factory=dict)
     # {driver_number: stint_count} — for pit detection via TimingAppData
     _stint_counts: dict[int, int] = field(default_factory=dict)
+    # {(driver_number, stint_count): {lap, compound, ts}} — pending pits awaiting PitLane confirmation
+    _pending_pits: dict = field(default_factory=dict)
     # Static path for this session (from SessionInfo.Path) e.g. "2026/2026-06-14_Barcelona_Grand_Prix/2026-06-14_Race/"
     session_path: str = ""
     # {driver_number(int): acronym(str)} -- built from DriverList
@@ -570,7 +572,6 @@ class SessionTracker:
             stint_count = len(stints)
             prev_count = state._stint_counts.get(dn, 0)
             if stint_count > prev_count and prev_count > 0 and emit_events:
-                # New stint = completed pit stop
                 import time as _time
                 state.recently_pitted[dn] = _time.monotonic()
                 lap = last_stint.get("LapNumber") or last_stint.get("StartLaps")
@@ -578,20 +579,44 @@ class SessionTracker:
                     lap = int(lap) if lap is not None else None
                 except (TypeError, ValueError):
                     lap = None
-                key = (dn, lap)
-                if key not in state.seen_pits:
-                    state.seen_pits.add(key)
-                    state.pit_counts[dn] = state.pit_counts.get(dn, 0) + 1
-                    acr = _resolve_driver(dn, state.driver_map)
-                    if self.on_pit_stop:
-                        await self.on_pit_stop(
-                            acronym=acr,
-                            compound=compound.upper() if compound else "UNKNOWN",
-                            pit_duration=None,
-                            lap_number=lap,
-                            pit_count=state.pit_counts[dn],
-                        )
+                # Register a pending pit — PitLaneTimeCollection will confirm it
+                # with actual duration. Key uses stint_count so it matches exactly once.
+                pending_key = (dn, stint_count)
+                if pending_key not in state._pending_pits:
+                    state._pending_pits[pending_key] = {
+                        "lap": lap,
+                        "compound": compound.upper() if compound else "UNKNOWN",
+                        "ts": _time.monotonic(),
+                    }
             state._stint_counts[dn] = stint_count
+
+    async def _flush_pending_pits(self, state: SessionState) -> None:
+        """Fire on_pit_stop for any pending pits that PitLaneTimeCollection never confirmed (>60s fallback)."""
+        import time as _time
+        now = _time.monotonic()
+        for pk in list(state._pending_pits):
+            info = state._pending_pits[pk]
+            if now - info["ts"] < 60.0:
+                continue
+            dn = pk[0]
+            lap = info["lap"]
+            compound = info["compound"]
+            key = (dn, lap)
+            del state._pending_pits[pk]
+            if key in state.seen_pits:
+                continue
+            state.seen_pits.add(key)
+            state.pit_counts[dn] = state.pit_counts.get(dn, 0) + 1
+            acr = _resolve_driver(dn, state.driver_map)
+            logger.debug("Fallback pit fire for %s lap=%s (PitLane data never arrived)", acr, lap)
+            if self.on_pit_stop:
+                await self.on_pit_stop(
+                    acronym=acr,
+                    compound=compound,
+                    pit_duration=None,
+                    lap_number=lap,
+                    pit_count=state.pit_counts[dn],
+                )
 
     # -- TimingData: positions + fastest laps -----------------------------------
 
@@ -599,6 +624,10 @@ class SessionTracker:
         lines = data.get("Lines", {})
         if not isinstance(lines, dict):
             return
+
+        # Flush any pending pits that PitLaneTimeCollection never confirmed (>60s)
+        if emit_events:
+            await self._flush_pending_pits(state)
 
         new_positions: dict[int, int] = {}
 
@@ -719,6 +748,11 @@ class SessionTracker:
             if key in state.seen_pits:
                 continue
             state.seen_pits.add(key)
+
+            # Clear the pending pit registered by TimingAppData (any stint_count for this driver)
+            for pk in list(state._pending_pits):
+                if pk[0] == dn:
+                    del state._pending_pits[pk]
 
             duration_raw = info.get("Duration") or info.get("PitTime")
             duration: float | None = None
