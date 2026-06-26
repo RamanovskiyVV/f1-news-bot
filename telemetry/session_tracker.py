@@ -806,8 +806,10 @@ class SessionTracker:
             sector        = msg.get("Sector")
             key = f"{utc}:{text}"
             if not text or key in state.seen_rc:
+                logger.info("RC skipped (seen): %s", text[:80])
                 continue
             state.seen_rc.add(key)
+            logger.info("RC new message: flag=%r text=%r", flag, text[:100])
             # Resolve driver acronym from racing number
             driver_acr = None
             if racing_number:
