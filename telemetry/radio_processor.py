@@ -8,7 +8,7 @@ import logging
 import httpx
 from openai import AsyncOpenAI
 
-from .config import OPENAI_API_KEY, OPENAI_FILTER_MODEL, OPENAI_WHISPER_MODEL
+from .config import F1_SUBSCRIPTION_TOKEN, OPENAI_API_KEY, OPENAI_FILTER_MODEL, OPENAI_WHISPER_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -84,10 +84,13 @@ async def process_radio(
 
 async def _download_audio(url: str) -> bytes | None:
     try:
+        headers = {}
+        if F1_SUBSCRIPTION_TOKEN:
+            headers["Authorization"] = f"Bearer {F1_SUBSCRIPTION_TOKEN}"
         async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.get(url)
+            r = await client.get(url, headers=headers)
             if r.status_code == 403:
-                logger.warning("Radio 403 (URL may be wrong, missing session_path?): %s", url)
+                logger.warning("Radio 403 (auth failed or wrong URL): %s", url)
                 return None
             r.raise_for_status()
             if len(r.content) > _MAX_AUDIO_BYTES:
