@@ -268,6 +268,7 @@ class LiveTimingClient:
                 # args = [topic, data, ...extra]
                 topic = args[0]
                 data  = args[1] if len(args) > 1 else {}
+                logger.info("SignalR live feed: %s", topic)
                 # Accumulate state
                 if isinstance(data, dict) and isinstance(self._state.get(topic), dict):
                     _deep_update(self._state[topic], data)
