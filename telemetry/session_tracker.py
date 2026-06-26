@@ -677,10 +677,9 @@ class SessionTracker:
                     prev = state.best_laps.get(dn)
                     if prev is None or lap_secs < prev:
                         state.best_laps[dn] = lap_secs
-                        if is_overall or (
-                            state.overall_fastest is None
-                            or lap_secs < state.overall_fastest
-                        ):
+                    # Only fire fastest lap when SignalR explicitly marks it overall fastest
+                    if is_overall:
+                        if state.overall_fastest is None or lap_secs < state.overall_fastest:
                             state.overall_fastest = lap_secs
                             state.overall_fastest_driver = dn
                             acr = _resolve_driver(dn, state.driver_map)

@@ -147,6 +147,11 @@ async def _on_session_start(session: dict) -> None:
     if sk:
         _seen_restored.add(str(sk))
         _restore_seen_to_state(str(sk))
+        # Don't re-send session start on every restart/reconnect
+        start_key = f"start_{sk}"
+        if _already_sent(start_key):
+            return
+        _mark_sent(start_key)
     text = fmt_session_start(session)
     await _send(text)
 
