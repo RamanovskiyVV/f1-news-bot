@@ -146,6 +146,22 @@ def fmt_fastest_lap(
     return "\n".join(lines)
 
 
+def fmt_top3_entry(
+    acronym: str,
+    position: int,
+    lap_time: float,
+) -> str:
+    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+    medal = medals.get(position, f"P{position}")
+    pos_str = {1: "1-е место", 2: "2-е место", 3: "3-е место"}.get(position, f"P{position}")
+    lines = [
+        f"{medal} <b>ТОП-3</b>  ·  {pos_str}",
+        "",
+        f"{driver_label(acronym, with_flag=False)}  <code>{_fmt_lap_time(lap_time)}</code>",
+    ]
+    return "\n".join(lines)
+
+
 def fmt_pit_stop(
     acronym: str,
     compound: str | None,

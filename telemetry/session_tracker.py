@@ -161,6 +161,7 @@ class SessionTracker:
     on_pit_stop:         EventCallback | None = None
     on_race_control:     EventCallback | None = None
     on_team_radio:       EventCallback | None = None
+    on_top3_entry:       EventCallback | None = None
 
     def __init__(self) -> None:
         self._state: SessionState | None = None
@@ -677,6 +678,26 @@ class SessionTracker:
                     prev = state.best_laps.get(dn)
                     if prev is None or lap_secs < prev:
                         state.best_laps[dn] = lap_secs
+                        # Check if driver entered top 3 in practice
+                        is_practice = sname.startswith("Practice")
+                        if emit_events and is_practice and self.on_top3_entry:
+                            sorted_laps = sorted(state.best_laps.items(), key=lambda x: x[1])
+                            new_pos = next((i+1 for i, (d, _) in enumerate(sorted_laps) if d == dn), None)
+                            old_pos = None
+                            if prev is not None:
+                                old_sorted = sorted(
+                                    {k: v for k, v in state.best_laps.items() if k != dn or v != lap_secs}.items(),
+                                    key=lambda x: x[1]
+                                )
+                                old_pos = next((i+1 for i, (d, _) in enumerate(old_sorted) if d == dn), None)
+                            if new_pos and new_pos <= 3 and (old_pos is None or old_pos > 3):
+                                acr = _resolve_driver(dn, state.driver_map)
+                                await self.on_top3_entry(
+                                    acronym=acr,
+                                    position=new_pos,
+                                    lap_time=lap_secs,
+                                    driver_number=dn,
+                                )
                     # Only fire fastest lap when SignalR explicitly marks it overall fastest
                     if is_overall:
                         if state.overall_fastest is None or lap_secs < state.overall_fastest:
