@@ -848,6 +848,9 @@ class SessionTracker:
 
     async def _process_team_radio(self, data: dict, state: SessionState) -> None:
         captures = data.get("Captures", [])
+        logger.info("TeamRadio SignalR message received: %d capture(s), raw keys=%s",
+                    len(captures) if isinstance(captures, (list, dict)) else 0,
+                    list(data.keys()))
         if isinstance(captures, dict):
             captures = list(captures.values())
         if not isinstance(captures, list):
