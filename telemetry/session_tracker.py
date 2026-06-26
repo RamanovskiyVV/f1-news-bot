@@ -811,12 +811,12 @@ class SessionTracker:
             if not text or key in state.seen_rc:
                 logger.info("RC skipped (seen): %s", text[:80])
                 continue
-            state.seen_rc.add(key)
             # Skip old RC messages from snapshot (before bot connected)
             if utc:
                 try:
                     ts = datetime.fromisoformat(utc.replace("Z", "+00:00"))
                     if ts < cutoff:
+                        state.seen_rc.add(key)   # mark as seen so we don't retry old msgs
                         logger.info("RC skipped (old): %s", text[:80])
                         continue
                 except (ValueError, TypeError):
@@ -858,6 +858,8 @@ class SessionTracker:
                     scope=scope,
                     sector=sector,
                 )
+            # Mark as seen AFTER callback so failed sends can be retried on reconnect
+            state.seen_rc.add(key)
 
     # -- TeamRadio --------------------------------------------------------------
 

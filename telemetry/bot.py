@@ -108,8 +108,8 @@ _seen_restored: set[str] = set()  # session_keys for which seen events have been
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-async def _send(text: str, **kwargs) -> None:
-    """Send a HTML message to the telemetry channel."""
+async def _send(text: str, **kwargs) -> bool:
+    """Send a HTML message to the telemetry channel. Returns True on success."""
     assert _app
     try:
         await _app.bot.send_message(
@@ -118,8 +118,10 @@ async def _send(text: str, **kwargs) -> None:
             parse_mode=ParseMode.HTML,
             **kwargs,
         )
+        return True
     except Exception:
         logger.exception("Failed to send message to channel")
+        return False
 
 
 async def _send_voice(audio_bytes: bytes, caption: str) -> int | None:
@@ -366,8 +368,8 @@ async def _on_pit_stop(
         if sname.startswith("Practice"):
             return
     text = fmt_pit_stop(acronym, compound, pit_duration, lap_number, pit_count)
-    await _send(text)
-    _persist_seen()
+    if await _send(text):
+        _persist_seen()
 
 
 async def _on_race_control(
@@ -380,8 +382,8 @@ async def _on_race_control(
     sector: int | None = None,
 ) -> None:
     text = fmt_race_control(message, lap_number, category, flag=flag, driver=driver, scope=scope, sector=sector)
-    await _send(text)
-    _persist_seen()
+    if await _send(text):
+        _persist_seen()
 
 
 async def _on_team_radio(
@@ -400,8 +402,9 @@ async def _on_team_radio(
 
     # Send voice with full caption (original + translation in one message)
     caption = fmt_team_radio(acronym, result["original"], result["translated"], team=team_name)
-    await _send_voice(result["audio_bytes"], caption)
-    _persist_seen()
+    msg_id = await _send_voice(result["audio_bytes"], caption)
+    if msg_id is not None:
+        _persist_seen()
 
 
 # ── Job ────────────────────────────────────────────────────────────────────────
