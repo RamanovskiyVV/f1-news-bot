@@ -679,7 +679,7 @@ class SessionTracker:
                     if prev is None or lap_secs < prev:
                         state.best_laps[dn] = lap_secs
                         # Check if driver entered top 3 in practice
-                        is_practice = sname.startswith("Practice")
+                        is_practice = state.session_name.startswith("Practice")
                         if emit_events and is_practice and self.on_top3_entry:
                             sorted_laps = sorted(state.best_laps.items(), key=lambda x: x[1])
                             new_pos = next((i+1 for i, (d, _) in enumerate(sorted_laps) if d == dn), None)
