@@ -21,11 +21,12 @@ _MAX_AUDIO_BYTES = 2 * 1024 * 1024
 
 _FILTER_SYSTEM = (
     "You are a Formula 1 team radio analyst. "
-    "Decide if this transcription is interesting or entertaining for F1 fans. "
-    "Interesting = strategic drama, driver emotion, frustration, team conflict, "
-    "funny moment, incident, mechanical problem, safety car reaction, memorable quote. "
-    "NOT interesting = routine gap/position updates, generic box calls, simple acknowledgements. "
-    "Reply with exactly one line: YES or NO"
+    "Decide if this transcription is worth sharing with F1 fans. "
+    "Share = driver emotion, frustration, complaint, funny moment, incident, "
+    "mechanical problem, safety car reaction, strategy disagreement, tyre issue, "
+    "memorable or unusual quote, anything beyond standard procedure. "
+    "Don't share = pure gap/position numbers with no emotion, single-word confirmations like 'Copy' or 'OK'. "
+    "When in doubt, share it. Reply with exactly one line: YES or NO"
 )
 
 _TRANSLATE_SYSTEM = (
@@ -61,12 +62,15 @@ async def process_radio(
         # 2. Transcribe via Whisper (~$0.006/min, typical clip ≈ 20s ≈ $0.002)
         original = await _transcribe(audio_bytes, filename="radio.mp3")
         if not original or len(original.strip()) < 3:
+            logger.info("Radio skipped (empty transcription): %s", recording_url.split("/")[-1])
             return None
 
         # 3. Filter via GPT-mini (fractions of a cent per call)
         if not await _is_interesting(original, acronym):
-            logger.debug("Radio skipped (not interesting): %s — %s", acronym, original[:60])
+            logger.info("Radio filtered out (not interesting): %s — %s", acronym, original[:80])
             return None
+
+        logger.info("Radio PASSED filter: %s — %s", acronym, original[:80])
 
         # 4. Translate
         translated = await _translate(original)
