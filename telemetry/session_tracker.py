@@ -793,6 +793,9 @@ class SessionTracker:
         else:
             return
 
+        now_utc = datetime.now(timezone.utc)
+        cutoff = (self._livetiming_connected_at or now_utc) - timedelta(seconds=90)
+
         for msg in items:
             if not isinstance(msg, dict):
                 continue
@@ -809,6 +812,15 @@ class SessionTracker:
                 logger.info("RC skipped (seen): %s", text[:80])
                 continue
             state.seen_rc.add(key)
+            # Skip old RC messages from snapshot (before bot connected)
+            if utc:
+                try:
+                    ts = datetime.fromisoformat(utc.replace("Z", "+00:00"))
+                    if ts < cutoff:
+                        logger.info("RC skipped (old): %s", text[:80])
+                        continue
+                except (ValueError, TypeError):
+                    pass
             logger.info("RC new message: flag=%r text=%r", flag, text[:100])
             # Resolve driver acronym from racing number
             driver_acr = None
