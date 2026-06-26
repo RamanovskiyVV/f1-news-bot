@@ -189,8 +189,11 @@ class SessionTracker:
         session_doc = await client.get_latest_session()
 
         # Fallback: use cached session doc when OpenF1 is unavailable
+        # But don't use it if the cached session is already ended — that would
+        # prevent bootstrapping SignalR for a new session that started after a restart.
         if not session_doc and self._state and self._state.session_doc:
-            session_doc = self._state.session_doc
+            if not self._state.ended:
+                session_doc = self._state.session_doc
 
         if not session_doc:
             # OpenF1 unavailable AND no cache (e.g. bot restarted mid-session).
