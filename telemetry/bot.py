@@ -28,7 +28,6 @@ from .formatter import (
     fmt_session_end,
     fmt_session_start,
     fmt_team_radio,
-    fmt_top3_entry,
 )
 from .livetiming_client import parse_lap_time
 from .radio_processor import process_radio
@@ -353,17 +352,6 @@ async def _on_fastest_lap(
     await _send(text)
 
 
-async def _on_top3_entry(
-    acronym: str,
-    position: int,
-    lap_time: float,
-    driver_number: int | None,
-) -> None:
-    text = fmt_top3_entry(acronym, position, lap_time)
-    await _send(text)
-    _persist_seen()
-
-
 async def _on_pit_stop(
     acronym: str,
     compound: str | None,
@@ -620,11 +608,10 @@ def build_app() -> Application:
     _tracker.on_session_restored = _on_session_restored
     _tracker.on_session_end      = _on_session_end
     _tracker.on_overtake         = _on_overtake
-    _tracker.on_fastest_lap      = _on_fastest_lap
+    _tracker.on_fastest_lap      = None   # disabled
     _tracker.on_pit_stop         = _on_pit_stop
     _tracker.on_race_control     = _on_race_control
     _tracker.on_team_radio       = _on_team_radio
-    _tracker.on_top3_entry       = _on_top3_entry
 
     _app = (
         Application.builder()
