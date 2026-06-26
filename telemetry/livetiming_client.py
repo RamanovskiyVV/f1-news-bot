@@ -293,7 +293,12 @@ class LiveTimingClient:
         elif msg_type == 3:
             result = msg.get("result", {})
             if isinstance(result, dict):
+                logger.info("Subscribe snapshot topics: %s", list(result.keys()))
                 for topic, data in result.items():
+                    if topic == "TeamRadio":
+                        caps = data.get("Captures", {}) if isinstance(data, dict) else {}
+                        logger.info("TeamRadio in snapshot: %d captures",
+                                    len(caps) if isinstance(caps, (list, dict)) else 0)
                     if isinstance(data, dict):
                         _deep_update(self._state.setdefault(topic, {}), data)
                     else:
