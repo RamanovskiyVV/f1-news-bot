@@ -71,7 +71,7 @@ logger = logging.getLogger(__name__)
 EventCallback = Callable[..., Awaitable[None]]
 
 # Session types that get full live tracking (positions, laps, pits, radio)
-LIVE_SESSION_TYPES = {"Race", "Sprint", "Qualifying", "Sprint Qualifying"}
+LIVE_SESSION_TYPES = {"Race", "Sprint", "Qualifying", "Sprint Qualifying", "Practice 1", "Practice 2", "Practice 3"}
 # Session types that only emit race-control + end-of-session summary
 PRACTICE_SESSION_TYPES = {
     "Practice 1", "Practice 2", "Practice 3",
