@@ -167,6 +167,7 @@ class SessionTracker:
         self._livetiming_task: asyncio.Task | None = None
         self._livetiming_client: LiveTimingClient | None = None
         self._startup_check_done: bool = False  # fire missed-session only once on startup
+        self._livetiming_connected_at: datetime | None = None  # UTC time of last SignalR connect
 
     # -- Public -----------------------------------------------------------------
 
@@ -357,6 +358,7 @@ class SessionTracker:
         if self._livetiming_task and not self._livetiming_task.done():
             return
         logger.info("Starting F1 live timing SignalR task")
+        self._livetiming_connected_at = datetime.now(timezone.utc)
         self._livetiming_client = LiveTimingClient()
         self._livetiming_client.on_message = self._on_live_message
         self._livetiming_task = asyncio.create_task(
@@ -848,14 +850,18 @@ class SessionTracker:
 
     async def _process_team_radio(self, data: dict, state: SessionState) -> None:
         captures = data.get("Captures", [])
-        logger.info("TeamRadio SignalR message received: %d capture(s), raw keys=%s",
-                    len(captures) if isinstance(captures, (list, dict)) else 0,
-                    list(data.keys()))
         if isinstance(captures, dict):
             captures = list(captures.values())
         if not isinstance(captures, list):
             return
 
+        now_utc = datetime.now(timezone.utc)
+        # Ignore radio messages older than 90s at the moment of SignalR connect —
+        # those are historical backlog replayed on reconnect, not live events.
+        cutoff = (self._livetiming_connected_at or now_utc) - timedelta(seconds=90)
+
+        new_count = 0
+        skipped_old = 0
         for capture in captures:
             if not isinstance(capture, dict):
                 continue
@@ -872,21 +878,37 @@ class SessionTracker:
                 continue
             state.seen_radio.add(url)
 
+            # Skip historical backlog on reconnect
+            utc_str = capture.get("Utc", "")
+            if utc_str:
+                try:
+                    msg_ts = datetime.fromisoformat(utc_str.replace("Z", "+00:00"))
+                    if msg_ts.tzinfo is None:
+                        msg_ts = msg_ts.replace(tzinfo=timezone.utc)
+                    if msg_ts < cutoff:
+                        skipped_old += 1
+                        continue
+                except Exception:
+                    pass
+
+            new_count += 1
             rn_str = capture.get("RacingNumber", "")
             try:
                 dn = int(rn_str)
             except (ValueError, TypeError):
                 dn = None
             acr = _resolve_driver(dn, state.driver_map) if dn else rn_str
-            utc = capture.get("Utc", "")
 
             if self.on_team_radio:
                 await self.on_team_radio(
                     acronym=acr,
                     recording_url=url,
-                    date=utc,
+                    date=utc_str,
                     driver_number=dn,
                 )
+
+        if skipped_old or new_count:
+            logger.info("TeamRadio: %d new, %d skipped (historical backlog)", new_count, skipped_old)
 
     # -- SessionStatus ----------------------------------------------------------
 
