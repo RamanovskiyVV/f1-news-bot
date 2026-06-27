@@ -202,13 +202,6 @@ class SessionTracker:
         if not session_doc:
             # OpenF1 unavailable AND no cache (e.g. bot restarted mid-session).
             if self._state is None:
-                # Check if the last persisted session was already ended (e.g. bot
-                # restarted after FP2 finished) — in that case don't bootstrap SignalR
-                # for up to 30 minutes, then give up and bootstrap anyway for next session.
-                uptime = (datetime.now(timezone.utc) - self._started_at).total_seconds()
-                if self.is_last_session_ended and self.is_last_session_ended() and uptime < 1800:
-                    logger.debug("OpenF1 unavailable but last persisted session ended — skipping bootstrap (uptime %.0fs)", uptime)
-                    return
                 # Bootstrap: start SignalR blind -- SessionInfo topic will populate state.
                 logger.info(
                     "OpenF1 unavailable and no cached state -- bootstrapping SignalR"
