@@ -26,13 +26,14 @@ _FILTER_SYSTEM = (
     "incident or accident, mechanical failure or car problem (brakes not working, loss of power, vibration, "
     "hydraulics, mirror broken/missing, DRS stuck, suspension damage, any part of car not working), "
     "safety car/VSC reaction, strategy disagreement, tyre degradation or failure, "
-    "driver reporting they cannot stop/brake/steer/see properly, unusual or quotable line. "
+    "driver reporting car handling issues (oversteer, understeer, sliding, can't stop/brake/steer/see properly), "
+    "driver reacting to a lap time or sector, unusual or quotable line. "
     "Don't share = pure gap/position numbers with no emotion, single-word confirmations like 'Copy' or 'OK', "
     "trivial PERSONAL comfort (earplugs, seat padding, heat, visor fogging, drinks), "
     "routine setup adjustments (wing angle, brake bias tweak, diff setting, engine mode change with no drama), "
-    "routine pit call confirmations, anything that would bore a casual F1 fan. "
-    "Important: ANY report of a broken/missing/damaged car part is ALWAYS share. "
-    "Be selective — only share if a fan would actually care. Reply with exactly one line: YES or NO"
+    "routine pit call confirmations. "
+    "Important: ANY report of a broken/damaged car part or car not behaving is ALWAYS share. "
+    "Reply with exactly one line: YES or NO"
 )
 
 _TRANSLATE_SYSTEM = (
