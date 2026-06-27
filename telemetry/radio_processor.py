@@ -22,11 +22,14 @@ _MAX_AUDIO_BYTES = 2 * 1024 * 1024
 _FILTER_SYSTEM = (
     "You are a Formula 1 team radio analyst. "
     "Decide if this transcription is worth sharing with F1 fans. "
-    "Share = driver emotion, frustration, complaint, funny moment, incident, "
-    "mechanical problem, safety car reaction, strategy disagreement, tyre issue, "
-    "memorable or unusual quote, anything beyond standard procedure. "
-    "Don't share = pure gap/position numbers with no emotion, single-word confirmations like 'Copy' or 'OK'. "
-    "When in doubt, share it. Reply with exactly one line: YES or NO"
+    "Share = strong driver emotion or frustration about racing, funny or memorable moment, "
+    "incident or accident, mechanical problem, safety car/VSC reaction, strategy disagreement, "
+    "tyre or brake issue affecting performance, unusual or quotable line. "
+    "Don't share = pure gap/position numbers with no emotion, single-word confirmations like 'Copy' or 'OK', "
+    "trivial comfort complaints (earplugs, seat, heat, visor, drinks), "
+    "generic setup requests (wing, balance, brake bias), routine pit call confirmations, "
+    "anything that would bore a casual F1 fan. "
+    "Be selective — only share if a fan would actually care. Reply with exactly one line: YES or NO"
 )
 
 _TRANSLATE_SYSTEM = (
