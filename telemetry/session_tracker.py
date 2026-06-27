@@ -946,8 +946,18 @@ class SessionTracker:
     async def _process_session_status(self, data: dict, state: SessionState) -> None:
         status = data.get("Status", "")
         logger.debug("SessionStatus: %s", status)
-        # "Ends" fires at end of each Q segment (Q1/Q2) — do NOT trigger session end.
-        # Only "Finalised" / "Finished" mean the entire session is done.
-        if status in ("Finalised", "Finished"):
-            logger.info("SessionStatus=%s -> triggering end", status)
-            await self._trigger_session_end()
+        # F1 sends "Finished" at the end of each Q segment (Q1/Q2) and also after Race/Practice.
+        # F1 sends "Finalised" only after the ENTIRE qualifying session is truly over.
+        # For qualifying: only "Finalised" means the whole session is done.
+        # For race/practice: both "Finished" and "Finalised" mean it's done.
+        is_quali = "Qualifying" in (state.session_name or "")
+        if is_quali:
+            if status == "Finalised":
+                logger.info("SessionStatus=%s (Qualifying) -> triggering end", status)
+                await self._trigger_session_end()
+            elif status == "Finished":
+                logger.info("SessionStatus=Finished in Qualifying — treating as segment end, not session end")
+        else:
+            if status in ("Finalised", "Finished"):
+                logger.info("SessionStatus=%s -> triggering end", status)
+                await self._trigger_session_end()
