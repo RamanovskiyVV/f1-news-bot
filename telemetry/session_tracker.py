@@ -161,6 +161,8 @@ class SessionTracker:
     on_pit_stop:         EventCallback | None = None
     on_race_control:     EventCallback | None = None
     on_team_radio:       EventCallback | None = None
+    # Optional: called to check if last persisted session was ended (for bootstrap guard)
+    is_last_session_ended: Any = None  # Callable[[], bool] | None
 
     def __init__(self) -> None:
         self._state: SessionState | None = None
@@ -168,6 +170,7 @@ class SessionTracker:
         self._livetiming_client: LiveTimingClient | None = None
         self._startup_check_done: bool = False  # fire missed-session only once on startup
         self._livetiming_connected_at: datetime | None = None  # UTC time of last SignalR connect
+        self._started_at: datetime = datetime.now(timezone.utc)  # process start time
 
     # -- Public -----------------------------------------------------------------
 
@@ -198,8 +201,15 @@ class SessionTracker:
 
         if not session_doc:
             # OpenF1 unavailable AND no cache (e.g. bot restarted mid-session).
-            # Bootstrap: start SignalR blind -- SessionInfo topic will populate state.
             if self._state is None:
+                # Check if the last persisted session was already ended (e.g. bot
+                # restarted after FP2 finished) — in that case don't bootstrap SignalR
+                # for up to 30 minutes, then give up and bootstrap anyway for next session.
+                uptime = (datetime.now(timezone.utc) - self._started_at).total_seconds()
+                if self.is_last_session_ended and self.is_last_session_ended() and uptime < 1800:
+                    logger.debug("OpenF1 unavailable but last persisted session ended — skipping bootstrap (uptime %.0fs)", uptime)
+                    return
+                # Bootstrap: start SignalR blind -- SessionInfo topic will populate state.
                 logger.info(
                     "OpenF1 unavailable and no cached state -- bootstrapping SignalR"
                 )
@@ -210,7 +220,13 @@ class SessionTracker:
                     meeting_key=-1,
                     started=True,   # assume live since we can't verify
                 )
-            self._start_livetiming()
+                self._start_livetiming()
+            elif not self._state.ended:
+                # Session exists and not ended — keep SignalR alive (mid-session reconnect)
+                self._start_livetiming()
+            else:
+                # Session ended — don't reconnect SignalR, wait for OpenF1 to return a new session
+                logger.debug("OpenF1 unavailable but session already ended — not reconnecting SignalR")
             return
 
         sk    = session_doc["session_key"]
@@ -815,6 +831,8 @@ class SessionTracker:
             if utc:
                 try:
                     ts = datetime.fromisoformat(utc.replace("Z", "+00:00"))
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
                     if ts < cutoff:
                         state.seen_rc.add(key)   # mark as seen so we don't retry old msgs
                         logger.info("RC skipped (old): %s", text[:80])

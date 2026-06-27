@@ -61,18 +61,29 @@ def _already_sent(session_key) -> bool:
 # ── Seen-events persistence (dedup RC/radio/pits across restarts) ─────────────
 _SEEN_FILE = Path(__file__).parent.parent / "seen_events.json"
 
-def _load_seen(session_key: str) -> dict:
+def _load_seen(session_key: str = "") -> dict:
+    """Load seen events. If session_key is empty, load whatever is on disk."""
     try:
         data = json.loads(_SEEN_FILE.read_text())
-        if isinstance(data, dict) and data.get("session_key") == session_key:
-            return data
+        if isinstance(data, dict):
+            if not session_key or data.get("session_key") == session_key:
+                return data
     except Exception:
         pass
-    return {"session_key": session_key, "rc": [], "radio": [], "pits": []}
+    return {"session_key": session_key, "ended": False, "rc": [], "radio": [], "pits": []}
 
-def _save_seen(session_key: str, rc: set, radio: set, pits: set) -> None:
+def _is_last_session_ended() -> bool:
+    """Return True if the last persisted session was marked as ended."""
+    try:
+        data = json.loads(_SEEN_FILE.read_text())
+        return bool(data.get("ended", False))
+    except Exception:
+        return False
+
+def _save_seen(session_key: str, rc: set, radio: set, pits: set, ended: bool = False) -> None:
     _SEEN_FILE.write_text(json.dumps({
         "session_key": session_key,
+        "ended":       ended,
         "rc":    list(rc),
         "radio": list(radio),
         "pits":  [list(p) for p in pits],
@@ -229,6 +240,17 @@ async def _on_session_end(
     if sk and _already_sent(sk):
         logger.info("Results for session %s already sent, skipping.", sk)
         return
+
+    # Mark session as ended in persisted state immediately so restarts don't re-bootstrap
+    if sk:
+        state = _tracker.current_session
+        _save_seen(
+            str(sk),
+            state.seen_rc if state else set(),
+            state.seen_radio if state else set(),
+            state.seen_pits if state else set(),
+            ended=True,
+        )
 
     sname = session.get("session_name", "")
     is_fp    = any(sname.startswith(p) for p in ("Practice", "Free Practice", "FP"))
@@ -607,14 +629,15 @@ def build_app() -> Application:
     global _app
 
     # Wire tracker callbacks
-    _tracker.on_session_start    = _on_session_start
-    _tracker.on_session_restored = _on_session_restored
-    _tracker.on_session_end      = _on_session_end
-    _tracker.on_overtake         = _on_overtake
-    _tracker.on_fastest_lap      = None   # disabled
-    _tracker.on_pit_stop         = _on_pit_stop
-    _tracker.on_race_control     = _on_race_control
-    _tracker.on_team_radio       = _on_team_radio
+    _tracker.on_session_start      = _on_session_start
+    _tracker.on_session_restored   = _on_session_restored
+    _tracker.on_session_end        = _on_session_end
+    _tracker.on_overtake           = _on_overtake
+    _tracker.on_fastest_lap        = None   # disabled
+    _tracker.on_pit_stop           = _on_pit_stop
+    _tracker.on_race_control       = _on_race_control
+    _tracker.on_team_radio         = _on_team_radio
+    _tracker.is_last_session_ended = _is_last_session_ended
 
     _app = (
         Application.builder()
