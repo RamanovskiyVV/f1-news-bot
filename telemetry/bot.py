@@ -383,11 +383,11 @@ async def _on_pit_stop(
     lap_number: int | None,
     pit_count: int | None,
 ) -> None:
-    # Pit stops are only relevant during race/sprint/qualifying — skip practice
+    # Pit stops are only relevant during race/sprint — skip practice and qualifying
     state = _tracker.current_session
     if state:
         sname = state.session_name or ""
-        if sname.startswith("Practice"):
+        if sname.startswith("Practice") or "Qualifying" in sname:
             return
     text = fmt_pit_stop(acronym, compound, pit_duration, lap_number, pit_count)
     if await _send(text):
