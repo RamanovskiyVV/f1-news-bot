@@ -704,35 +704,40 @@ class SessionTracker:
         if new_positions:
             import time as _time
             now = _time.monotonic()
-            # Clear recently_pitted entries older than 60s (position shuffle should be done)
+            # Clear recently_pitted entries older than 60s
             state.recently_pitted = {dn: ts for dn, ts in state.recently_pitted.items()
                                       if now - ts < 60}
 
             old = state.last_positions
             if old:
+                # Build reverse map: old position -> driver number
+                old_pos_to_dn = {pos: dn for dn, pos in old.items()}
+
                 for dn, new_pos in new_positions.items():
                     old_pos = old.get(dn)
                     if old_pos is None or new_pos >= old_pos:
+                        continue  # not moved forward
+
+                    # Who was at new_pos before?
+                    other_dn = old_pos_to_dn.get(new_pos)
+                    if other_dn is None or other_dn == dn:
                         continue
-                    for other_dn, other_new_pos in new_positions.items():
-                        if other_dn == dn:
-                            continue
-                        other_old = old.get(other_dn, other_new_pos)
-                        if other_old == new_pos and other_new_pos == old_pos:
-                            # Suppress if either driver recently pitted (position swap is pit-caused)
-                            if dn in state.recently_pitted or other_dn in state.recently_pitted:
-                                break
-                            overtaker = _resolve_driver(dn, state.driver_map)
-                            overtaken  = _resolve_driver(other_dn, state.driver_map)
-                            if self.on_overtake:
-                                await self.on_overtake(
-                                    overtaker=overtaker,
-                                    overtaken=overtaken,
-                                    new_pos=new_pos,
-                                    old_pos=old_pos,
-                                    lap=None,
-                                )
-                            break
+
+                    # Suppress pit-caused position swaps
+                    if dn in state.recently_pitted or other_dn in state.recently_pitted:
+                        continue
+
+                    overtaker = _resolve_driver(dn, state.driver_map)
+                    overtaken  = _resolve_driver(other_dn, state.driver_map)
+                    if self.on_overtake:
+                        await self.on_overtake(
+                            overtaker=overtaker,
+                            overtaken=overtaken,
+                            new_pos=new_pos,
+                            old_pos=old_pos,
+                            lap=None,
+                        )
+
             state.last_positions.update(new_positions)
 
     # -- PitLaneTimeCollection --------------------------------------------------
