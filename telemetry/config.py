@@ -54,7 +54,7 @@ DRIVERS: dict[str, dict] = {
     "OCO": {"flag": "🇫🇷", "name": "Ocon",         "team": "haas"},
     "BEA": {"flag": "🇫🇷", "name": "Bearman",      "team": "haas"},
     # Reserve / test / FP1 drivers
-    "PER": {"flag": "🇲🇽", "name": "Perez",         "team": "red_bull"},
+    "PER": {"flag": "🇲🇽", "name": "Perez",         "team": "cadillac"},
     "BOT": {"flag": "🇫🇮", "name": "Bottas",       "team": "sauber"},
     "LIN": {"flag": "🇬🇧", "name": "Lindblad",     "team": "red_bull"},
     "COL": {"flag": "🇦🇷", "name": "Colapinto",    "team": "alpine"},
@@ -79,6 +79,7 @@ TEAM_NAMES: dict[str, str] = {
     "sauber":       "Kick Sauber",
     "williams":     "Williams",
     "haas":         "Haas",
+    "cadillac":     "Cadillac",
 }
 
 # Tyre compound colours for display
