@@ -75,9 +75,12 @@ async def process_radio(
             logger.info("Radio skipped (empty transcription): %s", recording_url.split("/")[-1])
             return None
 
-        # 3. Filter via GPT-mini (fractions of a cent per call)
-        if not await _is_interesting(original, acronym):
-            logger.info("Radio filtered out (not interesting): %s — %s", acronym, original[:80])
+        # 3. Simple filter — skip only obvious junk (saves GPT cost, avoids over-filtering)
+        stripped = original.strip().rstrip(".!?,").strip()
+        JUNK = {"copy", "ok", "okay", "roger", "understood", "affirm", "affirmative",
+                "yes", "no", "sure", "alright", "alright then", "fine", "noted"}
+        if stripped.lower() in JUNK or len(stripped) < 6:
+            logger.info("Radio skipped (junk): %s — %s", acronym, original[:80])
             return None
 
         logger.info("Radio PASSED filter: %s — %s", acronym, original[:80])
