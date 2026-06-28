@@ -491,20 +491,25 @@ class SessionTracker:
         logger.debug("SessionInfo Path from SignalR: %r", session_path)
 
         # Update bootstrap state with real values
-        if is_bootstrap or state.session_key != session_key:
+        is_new_session = is_bootstrap or state.session_key != session_key
+        if is_new_session:
             state.session_key  = session_key
             state.session_name = session_name
             state.meeting_name = meeting_name
             state.meeting_key  = meeting_key
-            if session_path:
-                state.session_path = session_path
-                logger.info("session_path set from SignalR: %s", session_path)
-            else:
-                # Live race path is often empty in SignalR — fetch from static index
-                fetched = await _fetch_session_path(session_key)
-                if fetched:
-                    state.session_path = fetched
-                    logger.info("session_path fetched from static index: %s", fetched)
+
+        # Always update session_path when we have one, or when it's still empty
+        if session_path and state.session_path != session_path:
+            state.session_path = session_path
+            logger.info("session_path set from SignalR: %s", session_path)
+        elif not state.session_path:
+            # Live race path is often empty in SignalR — fetch from static index
+            fetched = await _fetch_session_path(session_key)
+            if fetched:
+                state.session_path = fetched
+                logger.info("session_path fetched from static index: %s", fetched)
+
+        if is_new_session:
             if utc_start:
                 state.session_doc["date_start"] = utc_start
                 state.session_doc["session_key"] = session_key
