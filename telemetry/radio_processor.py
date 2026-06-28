@@ -28,6 +28,7 @@ _FILTER_SYSTEM = (
     "safety car/VSC reaction, strategy disagreement or discussion, tyre degradation or failure, "
     "driver reporting car handling issues (oversteer, understeer, sliding, can't stop/brake/steer/see properly), "
     "team orders or position swaps (hold position, let him past, swap back), "
+    "driver being told or telling to push/attack/defend, urgency calls during race, "
     "driver reacting to a lap time or sector, driver commenting on another driver's move or incident, "
     "unusual or quotable line. "
     "Don't share = pure gap/position numbers with no emotion, single-word confirmations like 'Copy' or 'OK', "
@@ -35,7 +36,7 @@ _FILTER_SYSTEM = (
     "routine setup adjustments (wing angle, brake bias tweak, diff setting, engine mode change with no drama), "
     "routine pit call confirmations, inaudible or unclear audio transcribed as dots or silence. "
     "Important: ANY report of a broken/damaged car part or car not behaving is ALWAYS share. "
-    "Reply with exactly one line: YES or NO"
+    "When in doubt, share. Reply with exactly one line: YES or NO"
 )
 
 _TRANSLATE_SYSTEM = (
