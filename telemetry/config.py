@@ -40,7 +40,7 @@ DRIVERS: dict[str, dict] = {
     "SAI": {"flag": "🇪🇸", "name": "Sainz",        "team": "williams"},
     "HAM": {"flag": "🇬🇧", "name": "Hamilton",     "team": "ferrari"},
     "RUS": {"flag": "🇬🇧", "name": "Russell",      "team": "mercedes"},
-    "ANT": {"flag": "🇬🇧", "name": "Antonelli",    "team": "mercedes"},
+    "ANT": {"flag": "�🇹", "name": "Antonelli",    "team": "mercedes"},
     "ALO": {"flag": "🇪🇸", "name": "Alonso",       "team": "aston_martin"},
     "STR": {"flag": "🇨🇦", "name": "Stroll",       "team": "aston_martin"},
     "GAS": {"flag": "🇫🇷", "name": "Gasly",        "team": "alpine"},
