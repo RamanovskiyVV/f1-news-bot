@@ -1,6 +1,7 @@
 """Telegram bot for the F1 telemetry channel."""
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
@@ -8,6 +9,7 @@ from pathlib import Path
 
 from telegram import Update
 from telegram.constants import ParseMode
+from telegram.error import RetryAfter, TimedOut
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from .config import (
@@ -119,37 +121,80 @@ _seen_restored: set[str] = set()  # session_keys for which seen events have been
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
+# Serialize all outbound sends and keep a minimum gap between them so we don't
+# trip Telegram's per-channel flood limit (~20 msg/min). On RetryAfter we wait
+# the requested cooldown and retry instead of dropping the message.
+_send_lock = asyncio.Lock()
+_last_send_ts = 0.0
+_MIN_SEND_INTERVAL = 3.5  # seconds between messages
+_MAX_SEND_RETRIES = 4
+
+
+async def _throttle() -> None:
+    """Sleep so consecutive sends respect _MIN_SEND_INTERVAL."""
+    global _last_send_ts
+    now = asyncio.get_event_loop().time()
+    wait = _MIN_SEND_INTERVAL - (now - _last_send_ts)
+    if wait > 0:
+        await asyncio.sleep(wait)
+    _last_send_ts = asyncio.get_event_loop().time()
+
+
 async def _send(text: str, **kwargs) -> bool:
     """Send a HTML message to the telemetry channel. Returns True on success."""
     assert _app
-    try:
-        await _app.bot.send_message(
-            chat_id=TELEMETRY_CHANNEL_ID,
-            text=text,
-            parse_mode=ParseMode.HTML,
-            **kwargs,
-        )
-        return True
-    except Exception:
-        logger.exception("Failed to send message to channel")
+    async with _send_lock:
+        for attempt in range(_MAX_SEND_RETRIES):
+            await _throttle()
+            try:
+                await _app.bot.send_message(
+                    chat_id=TELEMETRY_CHANNEL_ID,
+                    text=text,
+                    parse_mode=ParseMode.HTML,
+                    **kwargs,
+                )
+                return True
+            except RetryAfter as e:
+                cooldown = float(e.retry_after) + 1.0
+                logger.warning("Flood control on send_message, waiting %.0fs (attempt %d)", cooldown, attempt + 1)
+                await asyncio.sleep(cooldown)
+            except TimedOut:
+                logger.warning("Timed out on send_message, retrying (attempt %d)", attempt + 1)
+                await asyncio.sleep(2.0)
+            except Exception:
+                logger.exception("Failed to send message to channel")
+                return False
+        logger.error("Giving up on send_message after %d retries", _MAX_SEND_RETRIES)
         return False
 
 
 async def _send_voice(audio_bytes: bytes, caption: str) -> int | None:
     """Send a voice message; returns message_id."""
     assert _app
-    try:
-        buf = io.BytesIO(audio_bytes)
-        buf.name = "radio.ogg"
-        msg = await _app.bot.send_voice(
-            chat_id=TELEMETRY_CHANNEL_ID,
-            voice=buf,
-            caption=caption,
-            parse_mode=ParseMode.HTML,
-        )
-        return msg.message_id
-    except Exception:
-        logger.exception("Failed to send voice message")
+    async with _send_lock:
+        for attempt in range(_MAX_SEND_RETRIES):
+            await _throttle()
+            try:
+                buf = io.BytesIO(audio_bytes)
+                buf.name = "radio.ogg"
+                msg = await _app.bot.send_voice(
+                    chat_id=TELEMETRY_CHANNEL_ID,
+                    voice=buf,
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                )
+                return msg.message_id
+            except RetryAfter as e:
+                cooldown = float(e.retry_after) + 1.0
+                logger.warning("Flood control on send_voice, waiting %.0fs (attempt %d)", cooldown, attempt + 1)
+                await asyncio.sleep(cooldown)
+            except TimedOut:
+                logger.warning("Timed out on send_voice, retrying (attempt %d)", attempt + 1)
+                await asyncio.sleep(2.0)
+            except Exception:
+                logger.exception("Failed to send voice message")
+                return None
+        logger.error("Giving up on send_voice after %d retries", _MAX_SEND_RETRIES)
         return None
 
 
