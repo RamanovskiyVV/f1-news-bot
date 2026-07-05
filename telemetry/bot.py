@@ -183,6 +183,7 @@ async def _send_voice(audio_bytes: bytes, caption: str) -> int | None:
                     caption=caption,
                     parse_mode=ParseMode.HTML,
                 )
+                logger.info("Voice message sent to channel (msg_id=%s)", msg.message_id)
                 return msg.message_id
             except RetryAfter as e:
                 cooldown = float(e.retry_after) + 1.0
@@ -460,6 +461,7 @@ async def _on_team_radio(
     driver_number: int | None,
 ) -> None:
     from .config import DRIVERS, TEAM_NAMES
+    logger.info("Team radio received: %s (%s)", acronym, recording_url.split("/")[-1])
     result = await process_radio(recording_url, acronym)
     if not result:
         return
