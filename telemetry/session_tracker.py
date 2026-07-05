@@ -78,6 +78,12 @@ PRACTICE_SESSION_TYPES = {
     "Free Practice 1", "Free Practice 2", "Free Practice 3",
 }
 
+# Once a pit stop is announced for a driver, ignore any further pit signals for
+# this driver within this window (seconds). Prevents duplicate announcements when
+# a late PitLane confirm arrives after the fallback already fired. Real successive
+# stops for one driver are always many minutes apart, so this is safe.
+_PIT_DEDUP_WINDOW = 120.0
+
 
 def _session_is_active(session_doc: dict) -> bool:
     """True if now is within session window (+90-min buffer)."""
@@ -133,6 +139,10 @@ class SessionState:
     # PitLaneTimeCollection. The event fires only once both are known (or on timeout),
     # so we never announce the stale (previous) tyre due to message ordering.
     _pending_pits: dict = field(default_factory=dict)
+    # {driver_number: monotonic_ts} — last time a pit event fired, used to swallow
+    # late/duplicate confirmations for the same stop (e.g. PitLane arriving after the
+    # 60s fallback already fired) regardless of differing lap numbers.
+    _last_pit_fire: dict[int, float] = field(default_factory=dict)
     # Static path for this session (from SessionInfo.Path) e.g. "2026/2026-06-14_Barcelona_Grand_Prix/2026-06-14_Race/"
     session_path: str = ""
     # {driver_number(int): acronym(str)} -- built from DriverList
@@ -599,7 +609,14 @@ class SessionTracker:
             prev_count = state._stint_counts.get(dn, 0)
             if stint_count > prev_count and prev_count > 0 and emit_events:
                 import time as _time
-                state.recently_pitted[dn] = _time.monotonic()
+                _now = _time.monotonic()
+                state.recently_pitted[dn] = _now
+                # Skip if we already announced a pit for this driver very recently —
+                # this is the same stop, not a new one.
+                last_fire = state._last_pit_fire.get(dn)
+                if last_fire is not None and (_now - last_fire) < _PIT_DEDUP_WINDOW:
+                    state._stint_counts[dn] = stint_count
+                    continue
                 lap = last_stint.get("LapNumber") or last_stint.get("StartLaps")
                 try:
                     lap = int(lap) if lap is not None else None
@@ -651,11 +668,20 @@ class SessionTracker:
                 continue
 
             del state._pending_pits[dn]
+
+            # Guard against duplicate announcements for the same stop (e.g. late
+            # PitLane confirm after a fallback already fired) — dedup by driver,
+            # independent of lap number which can differ between sources.
+            last_fire = state._last_pit_fire.get(dn)
+            if last_fire is not None and (now - last_fire) < _PIT_DEDUP_WINDOW:
+                continue
+
             lap = info["lap"]
             key = (dn, lap)
             if key in state.seen_pits:
                 continue
             state.seen_pits.add(key)
+            state._last_pit_fire[dn] = now
             state.pit_counts[dn] = state.pit_counts.get(dn, 0) + 1
             acr = _resolve_driver(dn, state.driver_map)
             logger.debug("Pit fire for %s lap=%s compound=%s confirmed=%s",
@@ -803,6 +829,16 @@ class SessionTracker:
             if key in state.seen_pits:
                 continue
 
+            # Mark as recently pitted to suppress fake overtake events for 60s
+            import time as _time
+            _now = _time.monotonic()
+            state.recently_pitted[dn] = _now
+
+            # Swallow late/duplicate confirms for a stop we already announced.
+            last_fire = state._last_pit_fire.get(dn)
+            if last_fire is not None and (_now - last_fire) < _PIT_DEDUP_WINDOW:
+                continue
+
             duration_raw = info.get("Duration") or info.get("PitTime")
             duration: float | None = None
             if duration_raw:
@@ -810,10 +846,6 @@ class SessionTracker:
                     duration = float(duration_raw)
                 except ValueError:
                     pass
-
-            # Mark as recently pitted to suppress fake overtake events for 60s
-            import time as _time
-            state.recently_pitted[dn] = _time.monotonic()
 
             # Confirm the pending pit (created by TimingAppData with the NEW tyre).
             # Do NOT fire here with current_tyre — it may still hold the OLD compound
@@ -828,7 +860,7 @@ class SessionTracker:
                     "compound": "UNKNOWN",
                     "duration": duration,
                     "confirmed": True,
-                    "ts": _time.monotonic(),
+                    "ts": _now,
                 }
             else:
                 p["confirmed"] = True
