@@ -830,6 +830,11 @@ class SessionTracker:
             if not text or key in state.seen_rc:
                 logger.info("RC skipped (seen): %s", text[:80])
                 continue
+            # Skip blue flags (backmarker being lapped) — not interesting
+            if "BLUE" in flag.upper() or "BLUE FLAG" in text.upper():
+                state.seen_rc.add(key)
+                logger.info("RC skipped (blue flag): %s", text[:80])
+                continue
             # Skip old RC messages from snapshot (before bot connected)
             if utc:
                 try:
