@@ -128,7 +128,10 @@ class SessionState:
     recently_pitted: dict[int, float] = field(default_factory=dict)
     # {driver_number: stint_count} — for pit detection via TimingAppData
     _stint_counts: dict[int, int] = field(default_factory=dict)
-    # {(driver_number, stint_count): {lap, compound, ts}} — pending pits awaiting PitLane confirmation
+    # {driver_number: {lap, compound, duration, confirmed, ts}} — pending pits.
+    # Compound comes from the NEW stint (TimingAppData); duration/confirmation from
+    # PitLaneTimeCollection. The event fires only once both are known (or on timeout),
+    # so we never announce the stale (previous) tyre due to message ordering.
     _pending_pits: dict = field(default_factory=dict)
     # Static path for this session (from SessionInfo.Path) e.g. "2026/2026-06-14_Barcelona_Grand_Prix/2026-06-14_Race/"
     session_path: str = ""
@@ -586,6 +589,10 @@ class SessionTracker:
             compound = last_stint.get("Compound", "")
             if compound:
                 state.current_tyre[rn_str] = compound.upper()
+                # Keep any pending pit for this driver in sync with the latest known
+                # stint compound (this is the NEW tyre fitted during the stop).
+                if dn in state._pending_pits:
+                    state._pending_pits[dn]["compound"] = compound.upper()
 
             # Pit detection: new stint appeared = driver pitted
             stint_count = len(stints)
@@ -598,41 +605,66 @@ class SessionTracker:
                     lap = int(lap) if lap is not None else None
                 except (TypeError, ValueError):
                     lap = None
-                # Register a pending pit — PitLaneTimeCollection will confirm it
-                # with actual duration. Key uses stint_count so it matches exactly once.
-                pending_key = (dn, stint_count)
-                if pending_key not in state._pending_pits:
-                    state._pending_pits[pending_key] = {
+                new_compound = compound.upper() if compound else "UNKNOWN"
+                # Register/update a pending pit. Compound here is the NEW tyre.
+                # PitLaneTimeCollection will fill in duration + confirm it.
+                p = state._pending_pits.get(dn)
+                if p is None:
+                    state._pending_pits[dn] = {
                         "lap": lap,
-                        "compound": compound.upper() if compound else "UNKNOWN",
+                        "compound": new_compound,
+                        "duration": None,
+                        "confirmed": False,
                         "ts": _time.monotonic(),
                     }
+                else:
+                    p["compound"] = new_compound
+                    if p.get("lap") is None:
+                        p["lap"] = lap
             state._stint_counts[dn] = stint_count
 
     async def _flush_pending_pits(self, state: SessionState) -> None:
-        """Fire on_pit_stop for any pending pits that PitLaneTimeCollection never confirmed (>60s fallback)."""
+        """Fire on_pit_stop for pending pits once compound + duration are known.
+
+        A pit fires when:
+          * confirmed by PitLane AND the new tyre compound is known (ideal), or
+          * confirmed by PitLane but compound still unknown after 15s (fallback), or
+          * never confirmed by PitLane after 60s (fallback, no duration).
+        This ordering guarantees we announce the NEW tyre, never the stale one.
+        """
         import time as _time
         now = _time.monotonic()
-        for pk in list(state._pending_pits):
-            info = state._pending_pits[pk]
-            if now - info["ts"] < 60.0:
+        for dn in list(state._pending_pits):
+            info = state._pending_pits[dn]
+            age = now - info["ts"]
+            confirmed = info.get("confirmed", False)
+            compound = info.get("compound", "UNKNOWN")
+            have_compound = bool(compound) and compound != "UNKNOWN"
+
+            if confirmed and have_compound:
+                ready = True
+            elif confirmed and age >= 15.0:
+                ready = True
+            elif not confirmed and age >= 60.0:
+                ready = True
+            else:
                 continue
-            dn = pk[0]
+
+            del state._pending_pits[dn]
             lap = info["lap"]
-            compound = info["compound"]
             key = (dn, lap)
-            del state._pending_pits[pk]
             if key in state.seen_pits:
                 continue
             state.seen_pits.add(key)
             state.pit_counts[dn] = state.pit_counts.get(dn, 0) + 1
             acr = _resolve_driver(dn, state.driver_map)
-            logger.debug("Fallback pit fire for %s lap=%s (PitLane data never arrived)", acr, lap)
+            logger.debug("Pit fire for %s lap=%s compound=%s confirmed=%s",
+                         acr, lap, compound, confirmed)
             if self.on_pit_stop:
                 await self.on_pit_stop(
                     acronym=acr,
-                    compound=compound,
-                    pit_duration=None,
+                    compound=compound if have_compound else "UNKNOWN",
+                    pit_duration=info.get("duration"),
                     lap_number=lap,
                     pit_count=state.pit_counts[dn],
                 )
@@ -770,12 +802,6 @@ class SessionTracker:
             key = (dn, lap)
             if key in state.seen_pits:
                 continue
-            state.seen_pits.add(key)
-
-            # Clear the pending pit registered by TimingAppData (any stint_count for this driver)
-            for pk in list(state._pending_pits):
-                if pk[0] == dn:
-                    del state._pending_pits[pk]
 
             duration_raw = info.get("Duration") or info.get("PitTime")
             duration: float | None = None
@@ -785,21 +811,33 @@ class SessionTracker:
                 except ValueError:
                     pass
 
-            compound = state.current_tyre.get(rn_str, "UNKNOWN")
-            state.pit_counts[dn] = state.pit_counts.get(dn, 0) + 1
-            acr = _resolve_driver(dn, state.driver_map)
             # Mark as recently pitted to suppress fake overtake events for 60s
             import time as _time
             state.recently_pitted[dn] = _time.monotonic()
 
-            if self.on_pit_stop:
-                await self.on_pit_stop(
-                    acronym=acr,
-                    compound=compound,
-                    pit_duration=duration,
-                    lap_number=lap,
-                    pit_count=state.pit_counts[dn],
-                )
+            # Confirm the pending pit (created by TimingAppData with the NEW tyre).
+            # Do NOT fire here with current_tyre — it may still hold the OLD compound
+            # if the new-stint TimingAppData hasn't been processed yet. The flush
+            # fires the event once the correct new compound is known.
+            p = state._pending_pits.get(dn)
+            if p is None:
+                # PitLane arrived before the new-stint TimingAppData. Create a
+                # pending pit with unknown compound; it gets filled in shortly.
+                state._pending_pits[dn] = {
+                    "lap": lap,
+                    "compound": "UNKNOWN",
+                    "duration": duration,
+                    "confirmed": True,
+                    "ts": _time.monotonic(),
+                }
+            else:
+                p["confirmed"] = True
+                p["duration"] = duration
+                if lap is not None:
+                    p["lap"] = lap
+
+        # Try to fire any pits that now have both compound and confirmation.
+        await self._flush_pending_pits(state)
 
     # -- RaceControlMessages ----------------------------------------------------
 
