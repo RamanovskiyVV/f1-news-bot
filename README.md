@@ -133,6 +133,16 @@ copy .env.example .env       # Windows
 | `TELEMETRY_BOT_TOKEN` | Токен нового бота от [@BotFather](https://t.me/BotFather) | — |
 | `TELEMETRY_CHANNEL_ID` | ID телеметрийного канала | — |
 | `TELEMETRY_POLL_INTERVAL` | Интервал поллинга OpenF1 (сек) | `15` |
+| `F1_SUBSCRIPTION_TOKEN` | JWT-токен F1TV Access (бесплатно) для SignalR-стрима | — |
+| `F1_COOKIE_LOGIN_SESSION` | Cookie `login-session` с formula1.com (F1TV Pro, для radio MP3) | — (опционально) |
+| `F1_COOKIE_ENTITLEMENT_TOKEN` | Cookie `entitlement_token` с formula1.com (F1TV Pro) | — (опционально) |
+| `CF_POLICY` | CloudFront cookie `CloudFront-Policy` | — (опционально) |
+| `CF_SIGNATURE` | CloudFront cookie `CloudFront-Signature` | — (опционально) |
+| `CF_KEY_PAIR_ID` | CloudFront cookie `CloudFront-Key-Pair-Id` | — (опционально) |
+
+> **Как получить `F1_SUBSCRIPTION_TOKEN`:** `python -c "from fastf1.internals.f1auth import get_auth_token; get_auth_token()"`
+>
+> **Как получить cookies для radio:** запустить `python get_cf_cookies.py` (F12 → Application → Cookies → formula1.com после входа в F1TV Pro)
 
 > **Важно:** Оба бота должны быть администраторами своих каналов.
 
@@ -151,6 +161,16 @@ python -m telemetry.main
 **Тест телеметрии (без токена):**
 ```bash
 python -m telemetry.test_local
+```
+
+**Получить F1TV subscription token (один раз):**
+```bash
+python -c "from fastf1.internals.f1auth import get_auth_token; get_auth_token()"
+```
+
+**Получить/проверить F1TV cookies для radio (F1TV Pro):**
+```bash
+python get_cf_cookies.py
 ```
 
 ## Команды ботов
@@ -173,6 +193,8 @@ python -m telemetry.test_local
 |---|---|
 | `/status` | Текущая/следующая сессия, кол-во событий, статус трекера |
 | `/schedule` | 🗓 Расписание ближайшего уикенда в канал (Минск/МСК + CET) |
+| `/results` | Принудительно запросить итоги сессии через FastF1 |
+| `/liveresults` | Отправить итоги из live SignalR-данных (без ожидания FastF1) |
 
 ## Как работает
 
@@ -267,11 +289,16 @@ f1-news-bot/
 ├── meme_scraper.py      # Парсинг мемов из Reddit (r/formuladank)
 ├── storage.py           # Хранилище опубликованных постов (контекст + reply)
 ├── config.py            # Конфигурация из .env
+├── get_cf_cookies.py    # Утилита: тест F1TV auth cookies для скачивания radio MP3
+├── reseed_seen.py       # Утилита: перестройка seen_news.json с нормализованными хэшами
+├── diag.py              # Утилита: диагностика — показывает новые необработанные новости
 ├── requirements.txt     # Python-зависимости
 ├── .env.example         # Шаблон переменных окружения
 ├── .gitignore           # Игнорируемые файлы
 ├── seen_news.json       # Хеши обработанных новостей (авто, макс. 2000, FIFO)
 ├── seen_memes.json      # Просмотренные/опубликованные мемы (авто, макс. 500, FIFO)
+├── seen_events.json     # Дедупликация событий телеметрии между рестартами (авто)
+├── sent_results.json    # Отметки об отправленных итогах сессий (авто, макс. 50)
 ├── image_cache.json     # Кэш результатов поиска фото (авто, макс. 200)
 ├── owner_chat_id.json   # Chat ID владельца (авто, переживает рестарт)
 ├── published_posts.json # История постов канала (авто, макс. 50)

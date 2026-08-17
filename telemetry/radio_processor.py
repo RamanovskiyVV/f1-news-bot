@@ -59,6 +59,9 @@ _TRANSLATE_SYSTEM = (
     "engineer callsigns, pronouns, and team-specific shorthand. "
     "Use these established F1 term translations where relevant instead of a literal translation: "
     f"{_TRANSLATE_TERMS_HINT}. "
+    "CRITICAL RULE: in F1, a phrase like 'a five second penalty' or '10 second penalty' means a "
+    "penalty measured in SECONDS (5s, 10s) -- F1 time penalties are never given in minutes. "
+    "Example: 'five second penalty' -> 'штраф 5 секунд' (correct), NOT 'пятиминутный штраф' (WRONG, never do this). "
     "Reply with only the translated text, no extra commentary."
 )
 
