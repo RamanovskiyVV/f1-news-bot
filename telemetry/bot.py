@@ -27,6 +27,7 @@ from .formatter import (
     fmt_qualifying_results,
     fmt_race_control,
     fmt_race_results,
+    fmt_race_summary,
     fmt_session_end,
     fmt_session_start,
     fmt_team_radio,
@@ -440,6 +441,15 @@ async def _on_pit_stop(
         _persist_seen()
 
 
+async def _on_race_summary(
+    current_lap: int,
+    total_laps: int,
+    rows: list,
+) -> None:
+    text = fmt_race_summary(current_lap, total_laps, rows)
+    await _send(text)
+
+
 async def _on_race_control(
     message: str,
     lap_number: int | None,
@@ -684,6 +694,7 @@ def build_app() -> Application:
     _tracker.on_pit_stop           = _on_pit_stop
     _tracker.on_race_control       = _on_race_control
     _tracker.on_team_radio         = _on_team_radio
+    _tracker.on_race_summary       = _on_race_summary
     _tracker.is_last_session_ended = _is_last_session_ended
 
     _app = (

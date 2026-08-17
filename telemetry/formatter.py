@@ -182,6 +182,22 @@ def fmt_pit_stop(
     return "\n".join(lines)
 
 
+def fmt_race_summary(current_lap: int, total_laps: int, rows: list[dict]) -> str:
+    """Periodic mid-race summary: positions, tyre compound + age, pit count."""
+    lap_str = f"  ·  Круг {current_lap}/{total_laps}" if total_laps else f"  ·  Круг {current_lap}"
+    lines = [f"🏎 <b>СВОДКА ГОНКИ</b>{lap_str}", ""]
+    for r in rows[:10]:
+        pos = r["position"]
+        medal = POSITION_MEDALS.get(pos, f"P{pos}")
+        tyre_str = _tyre(r.get("compound"))
+        age = r.get("tyre_age")
+        age_str = f" ({age} кр.)" if age is not None else ""
+        pit_count = r.get("pit_count") or 0
+        pit_str = f"  ·  🔧 {pit_count}" if pit_count else ""
+        lines.append(f"{medal} {driver_label(r['acronym'])}  {tyre_str}{age_str}{pit_str}")
+    return "\n".join(lines)
+
+
 def fmt_race_control(
     message: str,
     lap_number: int | None,

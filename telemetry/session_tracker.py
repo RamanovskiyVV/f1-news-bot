@@ -84,6 +84,9 @@ PRACTICE_SESSION_TYPES = {
 # stops for one driver are always many minutes apart, so this is safe.
 _PIT_DEDUP_WINDOW = 120.0
 
+# How often (in laps) to fire the periodic race summary during Race/Sprint sessions.
+_SUMMARY_LAP_INTERVAL = 22
+
 
 def _session_is_active(session_doc: dict) -> bool:
     """True if now is within session window (+90-min buffer)."""
@@ -162,6 +165,14 @@ class SessionState:
     race_gaps: dict[int, str] = field(default_factory=dict)
     # {driver_number(int): {"Q1": str, "Q2": str, "Q3": str}} -- qualifying segment times
     quali_q_times: dict[int, dict] = field(default_factory=dict)
+    # Current/total lap number, from the LapCount topic (race/sprint only)
+    current_lap: int = 0
+    total_laps: int = 0
+    # Lap at which the periodic race summary was last sent (0 = never)
+    last_summary_lap: int = 0
+    # {driver_number(int): lap_number} -- lap on which the driver's current tyre
+    # stint started, used to compute tyre age for the periodic summary
+    tyre_stint_start_lap: dict[int, int] = field(default_factory=dict)
 
 
 class SessionTracker:
@@ -179,6 +190,7 @@ class SessionTracker:
     on_pit_stop:         EventCallback | None = None
     on_race_control:     EventCallback | None = None
     on_team_radio:       EventCallback | None = None
+    on_race_summary:     EventCallback | None = None
     # Optional: called to check if last persisted session was ended (for bootstrap guard)
     is_last_session_ended: Any = None  # Callable[[], bool] | None
 
@@ -461,6 +473,9 @@ class SessionTracker:
                 await self._process_team_radio(data, state)
             elif topic == "SessionStatus":
                 await self._process_session_status(data, state)
+            elif topic == "LapCount" and is_live:
+                is_race_like = not sname.startswith("Practice") and "Qualifying" not in sname
+                await self._process_lap_count(data, state, emit_summary=is_race_like)
         except Exception:
             logger.exception("Error processing live topic %s", topic)
 
@@ -628,6 +643,10 @@ class SessionTracker:
                 except (TypeError, ValueError):
                     lap = None
                 new_compound = compound.upper() if compound else "UNKNOWN"
+                # Track when this stint started, for tyre-age reporting in the
+                # periodic race summary. Prefer the stint's own lap number, fall
+                # back to the last known current lap.
+                state.tyre_stint_start_lap[dn] = lap if lap is not None else state.current_lap
                 # Register/update a pending pit. Compound here is the NEW tyre.
                 # PitLaneTimeCollection will fill in duration + confirm it.
                 p = state._pending_pits.get(dn)
@@ -888,6 +907,48 @@ class SessionTracker:
 
         # Try to fire any pits that now have both compound and confirmation.
         await self._flush_pending_pits(state)
+
+    # -- LapCount (drives the periodic race summary) -----------------------------
+
+    async def _process_lap_count(self, data: dict, state: SessionState, emit_summary: bool) -> None:
+        if not isinstance(data, dict):
+            return
+        current = data.get("CurrentLap")
+        total = data.get("TotalLaps")
+        try:
+            if current is not None:
+                state.current_lap = int(current)
+            if total is not None:
+                state.total_laps = int(total)
+        except (TypeError, ValueError):
+            return
+
+        if not emit_summary or not self.on_race_summary or state.current_lap <= 0:
+            return
+        if state.current_lap - state.last_summary_lap < _SUMMARY_LAP_INTERVAL:
+            return
+
+        state.last_summary_lap = state.current_lap
+
+        rows = []
+        for dn, pos in sorted(state.last_positions.items(), key=lambda kv: kv[1]):
+            acr = _resolve_driver(dn, state.driver_map)
+            compound = state.current_tyre.get(str(dn))
+            stint_start = state.tyre_stint_start_lap.get(dn)
+            tyre_age = (state.current_lap - stint_start) if stint_start is not None else None
+            rows.append({
+                "position": pos,
+                "acronym": acr,
+                "compound": compound,
+                "tyre_age": tyre_age,
+                "pit_count": state.pit_counts.get(dn, 0),
+            })
+
+        await self.on_race_summary(
+            current_lap=state.current_lap,
+            total_laps=state.total_laps,
+            rows=rows,
+        )
 
     # -- RaceControlMessages ----------------------------------------------------
 
