@@ -137,6 +137,37 @@ RACING_NUMBER_TO_ACR: dict[int, str] = {
 }
 
 
+# Short vocabulary hint passed to Whisper's `prompt` param to bias transcription
+# toward F1 team-radio jargon and away from noise-driven mishearing. Whisper's
+# prompt window is small (~224 tokens) so keep this tight — driver/team names are
+# appended per-message in radio_processor.py.
+RADIO_GLOSSARY_PROMPT = (
+    "Box box box, pit confirm, push now, gap is, DRS, undercut, overcut, "
+    "safety car, virtual safety car, VSC, box this lap, box next lap, "
+    "tyre degradation, understeer, oversteer, hydraulics, brake bias, "
+    "P1, P2, P3, delta, sector."
+)
+
+# English radio phrase -> preferred Russian equivalent, given to the translation
+# model as a terminology reference so common F1 jargon is rendered consistently
+# instead of literally.
+RADIO_TERMS_RU: dict[str, str] = {
+    "box, box, box":  "на пит-стоп, живо",
+    "box this lap":   "заезжай на этом круге",
+    "box next lap":   "заезжай на следующем круге",
+    "push":           "дави / жми",
+    "gap":            "отрыв",
+    "undercut":       "андеркат",
+    "overcut":        "оверкат",
+    "safety car":     "машина безопасности",
+    "virtual safety car": "виртуальная машина безопасности",
+    "copy":           "принял",
+    "understood":     "понял",
+    "box, confirm":   "подтверди заезд на пит-стоп",
+    "delta":          "дельта (разница по времени)",
+}
+
+
 def driver_label(acronym: str, *, with_flag: bool = True) -> str:
     """Return e.g. '🇳🇱 VER' or just 'VER'."""
     d = DRIVERS.get(acronym.upper())

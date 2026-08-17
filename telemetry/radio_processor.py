@@ -8,7 +8,16 @@ import logging
 import httpx
 from openai import AsyncOpenAI
 
-from .config import F1_SUBSCRIPTION_TOKEN, OPENAI_API_KEY, OPENAI_FILTER_MODEL, OPENAI_WHISPER_MODEL
+from .config import (
+    DRIVERS,
+    F1_SUBSCRIPTION_TOKEN,
+    OPENAI_API_KEY,
+    OPENAI_FILTER_MODEL,
+    OPENAI_WHISPER_MODEL,
+    RADIO_GLOSSARY_PROMPT,
+    RADIO_TERMS_RU,
+    TEAM_NAMES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +48,17 @@ _FILTER_SYSTEM = (
     "When in doubt, share. Reply with exactly one line: YES or NO"
 )
 
+_TRANSLATE_TERMS_HINT = "; ".join(f'"{en}" -> "{ru}"' for en, ru in RADIO_TERMS_RU.items())
+
 _TRANSLATE_SYSTEM = (
     "You are a professional translator specializing in Formula 1. "
     "Translate the following team radio message from English to Russian. "
     "Use natural, idiomatic Russian — translate idioms and expressions by meaning, not word-for-word. "
     "Preserve the emotional tone, exclamations, and urgency. "
+    "You will be told which driver and team the message is from — use that to resolve ambiguous "
+    "engineer callsigns, pronouns, and team-specific shorthand. "
+    "Use these established F1 term translations where relevant instead of a literal translation: "
+    f"{_TRANSLATE_TERMS_HINT}. "
     "Reply with only the translated text, no extra commentary."
 )
 
@@ -63,6 +78,9 @@ async def process_radio(
         }
         or None if not interesting / download failed.
     """
+    team_key = DRIVERS.get(acronym.upper(), {}).get("team", "")
+    team_name = TEAM_NAMES.get(team_key, "")
+
     async with _semaphore:
         # 1. Download audio
         audio_bytes = await _download_audio(recording_url)
@@ -70,23 +88,28 @@ async def process_radio(
             return None
 
         # 2. Transcribe via Whisper (~$0.006/min, typical clip ≈ 20s ≈ $0.002)
-        original = await _transcribe(audio_bytes, filename="radio.mp3")
+        original = await _transcribe(audio_bytes, acronym=acronym, team=team_name, filename="radio.mp3")
         if not original or len(original.strip()) < 3:
             logger.info("Radio skipped (empty transcription): %s", recording_url.split("/")[-1])
             return None
 
-        # 3. Simple filter — skip only obvious junk (saves GPT cost, avoids over-filtering)
+        # 3a. Cheap pre-filter — skip single-word confirmations without spending a GPT call
         stripped = original.strip().rstrip(".!?,").strip()
         JUNK = {"copy", "ok", "okay", "roger", "understood", "affirm", "affirmative",
                 "yes", "no", "sure", "alright", "alright then", "fine", "noted"}
-        if stripped.lower() in JUNK or len(stripped) < 6:
+        if stripped.lower() in JUNK:
             logger.info("Radio skipped (junk): %s — %s", acronym, original[:80])
+            return None
+
+        # 3b. GPT relevance filter for anything past the trivial junk check
+        if not await _is_interesting(original, acronym):
+            logger.info("Radio skipped (not interesting): %s — %s", acronym, original[:80])
             return None
 
         logger.info("Radio PASSED filter: %s — %s", acronym, original[:80])
 
         # 4. Translate
-        translated = await _translate(original)
+        translated = await _translate(original, acronym=acronym, team=team_name)
 
         return {
             "original": original.strip(),
@@ -115,52 +138,84 @@ async def _download_audio(url: str) -> bytes | None:
         return None
 
 
-async def _transcribe(audio_bytes: bytes, filename: str = "radio.mp3") -> str:
-    try:
-        buf = io.BytesIO(audio_bytes)
-        buf.name = filename
-        response = await _client.audio.transcriptions.create(
-            model=OPENAI_WHISPER_MODEL,
-            file=buf,
-            language="en",
-        )
-        return response.text
-    except Exception as e:
-        logger.warning("Whisper transcription failed: %s", e)
-        return ""
+async def _transcribe(audio_bytes: bytes, acronym: str = "", team: str = "", filename: str = "radio.mp3") -> str:
+    driver = DRIVERS.get(acronym.upper(), {})
+    who = f" Driver: {driver.get('name', acronym)} ({team})." if acronym else ""
+    prompt = f"{RADIO_GLOSSARY_PROMPT}{who}"
+
+    for attempt in range(2):
+        try:
+            buf = io.BytesIO(audio_bytes)
+            buf.name = filename
+            response = await _client.audio.transcriptions.create(
+                model=OPENAI_WHISPER_MODEL,
+                file=buf,
+                language="en",
+                prompt=prompt,
+                response_format="verbose_json",
+            )
+            segments = getattr(response, "segments", None) or []
+            if not segments:
+                # Some SDK/model combos don't return segments even for verbose_json;
+                # fall back to the plain aggregated text in that case.
+                return response.text
+            kept = [
+                s.text for s in segments
+                if getattr(s, "no_speech_prob", 0.0) < 0.6 and getattr(s, "avg_logprob", 0.0) > -1.0
+            ]
+            return "".join(kept).strip()
+        except Exception as e:
+            if attempt == 0:
+                logger.warning("Whisper transcription failed, retrying: %s", e)
+                continue
+            logger.warning("Whisper transcription failed: %s", e)
+            return ""
+    return ""
 
 
 async def _is_interesting(text: str, acronym: str) -> bool:
-    try:
-        prompt = f"Driver: {acronym}\nRadio message: {text}"
-        response = await _client.chat.completions.create(
-            model=OPENAI_FILTER_MODEL,
-            messages=[
-                {"role": "system", "content": _FILTER_SYSTEM},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=5,
-            temperature=0,
-        )
-        answer = response.choices[0].message.content.strip().upper()
-        return answer.startswith("YES")
-    except Exception as e:
-        logger.warning("GPT filter failed, defaulting to skip: %s", e)
-        return False
+    prompt = f"Driver: {acronym}\nRadio message: {text}"
+    for attempt in range(2):
+        try:
+            response = await _client.chat.completions.create(
+                model=OPENAI_FILTER_MODEL,
+                messages=[
+                    {"role": "system", "content": _FILTER_SYSTEM},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=5,
+                temperature=0,
+            )
+            answer = response.choices[0].message.content.strip().upper()
+            return answer.startswith("YES")
+        except Exception as e:
+            if attempt == 0:
+                logger.warning("GPT filter failed, retrying: %s", e)
+                continue
+            # "When in doubt, share" — an API hiccup shouldn't silently drop content.
+            logger.warning("GPT filter failed, defaulting to share: %s", e)
+            return True
+    return True
 
 
-async def _translate(text: str) -> str:
-    try:
-        response = await _client.chat.completions.create(
-            model=OPENAI_FILTER_MODEL,
-            messages=[
-                {"role": "system", "content": _TRANSLATE_SYSTEM},
-                {"role": "user", "content": text},
-            ],
-            max_tokens=200,
-            temperature=0.3,
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.warning("GPT translation failed: %s", e)
-        return text  # fallback: return original
+async def _translate(text: str, acronym: str = "", team: str = "") -> str:
+    who = f"Driver: {acronym} ({team}).\n" if acronym else ""
+    user_content = f"{who}Radio message: {text}"
+    for attempt in range(2):
+        try:
+            response = await _client.chat.completions.create(
+                model=OPENAI_FILTER_MODEL,
+                messages=[
+                    {"role": "system", "content": _TRANSLATE_SYSTEM},
+                    {"role": "user", "content": user_content},
+                ],
+                max_tokens=200,
+                temperature=0.3,
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            if attempt == 0:
+                logger.warning("GPT translation failed, retrying: %s", e)
+                continue
+            logger.warning("GPT translation failed: %s", e)
+            return text  # fallback: return original
