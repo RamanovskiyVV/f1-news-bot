@@ -143,6 +143,11 @@ class SessionState:
     # late/duplicate confirmations for the same stop (e.g. PitLane arriving after the
     # 60s fallback already fired) regardless of differing lap numbers.
     _last_pit_fire: dict[int, float] = field(default_factory=dict)
+    # {driver_number: lap_number} — lap of the last fired pit event. Late/duplicate
+    # PitLaneTimeCollection resends for an already-announced stop tend to arrive a
+    # couple of laps afterwards (well past the 120s time window above), so this is
+    # used as a second, time-independent guard against re-announcing the same stop.
+    _last_pit_lap: dict[int, int] = field(default_factory=dict)
     # Static path for this session (from SessionInfo.Path) e.g. "2026/2026-06-14_Barcelona_Grand_Prix/2026-06-14_Race/"
     session_path: str = ""
     # {driver_number(int): acronym(str)} -- built from DriverList
@@ -682,6 +687,8 @@ class SessionTracker:
                 continue
             state.seen_pits.add(key)
             state._last_pit_fire[dn] = now
+            if lap is not None:
+                state._last_pit_lap[dn] = lap
             state.pit_counts[dn] = state.pit_counts.get(dn, 0) + 1
             acr = _resolve_driver(dn, state.driver_map)
             logger.debug("Pit fire for %s lap=%s compound=%s confirmed=%s",
@@ -853,8 +860,19 @@ class SessionTracker:
             # fires the event once the correct new compound is known.
             p = state._pending_pits.get(dn)
             if p is None:
-                # PitLane arrived before the new-stint TimingAppData. Create a
-                # pending pit with unknown compound; it gets filled in shortly.
+                # No pending pit for this driver. Two possibilities:
+                #  (a) PitLane arrived before the new-stint TimingAppData for a
+                #      genuinely new stop -> create a placeholder, filled in shortly.
+                #  (b) This is a late/duplicate PitLaneTimeCollection resend for a
+                #      stop we already announced, arriving after the _PIT_DEDUP_WINDOW
+                #      time guard above has expired (observed in practice: these
+                #      resends land 2-5 laps after the real stop, i.e. minutes later,
+                #      while genuine repeat stops for the same driver are always many
+                #      laps apart). Use the lap number to tell them apart instead of
+                #      relying on wall-clock time alone.
+                last_pit_lap = state._last_pit_lap.get(dn)
+                if last_pit_lap is not None and lap is not None and (lap - last_pit_lap) < 5:
+                    continue
                 state._pending_pits[dn] = {
                     "lap": lap,
                     "compound": "UNKNOWN",
