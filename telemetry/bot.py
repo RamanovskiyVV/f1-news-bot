@@ -19,6 +19,7 @@ from .config import (
     TELEMETRY_POLL_INTERVAL,
 )
 from . import fastf1_client as ff1
+from .image_gen import render_race_results_card
 from .formatter import (
     fmt_fastest_lap,
     fmt_overtake,
@@ -200,6 +201,37 @@ async def _send_voice(audio_bytes: bytes, caption: str) -> int | None:
         return None
 
 
+async def _send_photo(photo_bytes: bytes, caption: str = "") -> int | None:
+    """Send a PNG photo; returns message_id."""
+    assert _app
+    async with _send_lock:
+        for attempt in range(_MAX_SEND_RETRIES):
+            await _throttle()
+            try:
+                buf = io.BytesIO(photo_bytes)
+                buf.name = "card.png"
+                msg = await _app.bot.send_photo(
+                    chat_id=TELEMETRY_CHANNEL_ID,
+                    photo=buf,
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                )
+                logger.info("Photo sent to channel (msg_id=%s)", msg.message_id)
+                return msg.message_id
+            except RetryAfter as e:
+                cooldown = float(e.retry_after) + 1.0
+                logger.warning("Flood control on send_photo, waiting %.0fs (attempt %d)", cooldown, attempt + 1)
+                await asyncio.sleep(cooldown)
+            except TimedOut:
+                logger.warning("Timed out on send_photo, retrying (attempt %d)", attempt + 1)
+                await asyncio.sleep(2.0)
+            except Exception:
+                logger.exception("Failed to send photo")
+                return None
+        logger.error("Giving up on send_photo after %d retries", _MAX_SEND_RETRIES)
+        return None
+
+
 # ── Event callbacks ────────────────────────────────────────────────────────────
 
 async def _on_session_start(session: dict) -> None:
@@ -226,6 +258,16 @@ async def _on_session_restored(session_key: int) -> None:
         logger.debug("on_session_restored: preloaded seen events for session %s", sk)
 
 
+async def _send_race_results(session: dict, results: list, pit_stats: dict, standings: list) -> None:
+    """Send the race/sprint results card (photo) followed by the full text message."""
+    try:
+        photo = render_race_results_card(session, results, pit_stats)
+        await _send_photo(photo)
+    except Exception:
+        logger.exception("Failed to render/send race results card, continuing with text only")
+    await _send(fmt_race_results(session, results, pit_stats, standings))
+
+
 async def _send_session_results(session: dict) -> bool:
     """Fetch and send FastF1 summary for the given session.
     Returns True if data was available and sent, False if no data yet."""
@@ -245,7 +287,7 @@ async def _send_session_results(session: dict) -> bool:
         session_id = "Race" if is_race else "Sprint"
         results, pit_stats, standings = await _gather_race_data(year, gp, session_id)
         if results:
-            await _send(fmt_race_results(session, results, pit_stats, standings))
+            await _send_race_results(session, results, pit_stats, standings)
             return True
 
     elif is_quali:
@@ -336,7 +378,7 @@ async def _on_session_end(
         if results:
             total_pits = sum((pit_counts or {}).values())
             pit_stats = {"total": total_pits} if total_pits else {}
-            await _send(fmt_race_results(session, results, pit_stats, []))
+            await _send_race_results(session, results, pit_stats, [])
             if sk:
                 _mark_sent(sk)
             return
@@ -646,7 +688,7 @@ async def cmd_liveresults(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if results:
             total_pits = sum(state.pit_counts.values())
             pit_stats = {"total": total_pits} if total_pits else {}
-            await _send(fmt_race_results(session, results, pit_stats, []))
+            await _send_race_results(session, results, pit_stats, [])
             await update.message.reply_text("✅ Отправлено в канал.")
             return
 

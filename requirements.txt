@@ -7,3 +7,4 @@ beautifulsoup4>=4.12
 python-dotenv>=1.0
 lxml>=5.0
 fastf1>=3.3
+Pillow>=10.0
