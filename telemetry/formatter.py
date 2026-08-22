@@ -301,7 +301,7 @@ def fmt_race_results(
 
 
 def fmt_qualifying_results(session: dict, q_results: dict[str, list[dict]]) -> str:
-    """Qualifying results — no spoiler."""
+    """Qualifying results with one continuous classification across Q1/Q2/Q3."""
     gp = session.get("meeting_name", "")
     year = session.get("date_start", "")[:4]
     stype = session.get("session_name", "Qualifying")
@@ -310,18 +310,33 @@ def fmt_qualifying_results(session: dict, q_results: dict[str, list[dict]]) -> s
     header = f"📋 <b>{sprint_tag}КВАЛИФИКАЦИЯ</b>\n<b>{gp} {year}</b>"
 
     blocks: list[str] = []
-    # Show Q3/Q2/Q1 in order
+    seen_drivers: set[str] = set()
+    position = 1
+
+    # Show each driver only in the highest segment they reached.  Positions are
+    # continuous across the blocks: Q3 = P1.., Q2 eliminations follow, then Q1.
+    # This also normalizes FastF1 data, where Q3 drivers can appear in Q2/Q1.
     for label in ("Q3", "Q2", "Q1"):
         entries = q_results.get(label)
         if not entries:
             continue
         lines = [f"\n<b>{label}</b>"]
-        for i, r in enumerate(entries, 1):
+        added = 0
+        for r in entries:
             acr = r.get("BroadcastName", r.get("Abbreviation", "???")).upper()
+            driver_key = r.get("Abbreviation", acr).upper()
+            if driver_key in seen_drivers:
+                continue
+            seen_drivers.add(driver_key)
+
             t = r.get("QualifyingTime", r.get("time", "—"))
-            medal = POSITION_MEDALS.get(i, f"{i}.")
-            lines.append(f"{medal} {driver_label(acr)}  <code>{t}</code>")
-        blocks.append("\n".join(lines))
+            medal = POSITION_MEDALS.get(position)
+            position_label = f"{medal} P{position} ·" if medal else f"P{position} ·"
+            lines.append(f"{position_label} {driver_label(acr)}  <code>{t}</code>")
+            position += 1
+            added += 1
+        if added:
+            blocks.append("\n".join(lines))
 
     return header + "".join(blocks)
 
