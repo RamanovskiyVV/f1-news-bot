@@ -9,7 +9,9 @@ TELEMETRY_CHANNEL_ID = os.getenv("TELEMETRY_CHANNEL_ID")
 
 # OpenAI (shared key from main bot)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_WHISPER_MODEL = "whisper-1"
+# High-accuracy file transcription with F1 context/keyword hints. Keep the env
+# override so the model can be changed without another deploy.
+OPENAI_WHISPER_MODEL = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-transcribe")
 OPENAI_FILTER_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 # Polling
@@ -165,6 +167,9 @@ RADIO_TERMS_RU: dict[str, str] = {
     "understood":     "понял",
     "box, confirm":   "подтверди заезд на пит-стоп",
     "delta":          "дельта (разница по времени)",
+    "pit release":    "выпуск с пит-лейна",
+    "unsafe release": "небезопасный выпуск с пит-лейна",
+    "crying on the radio": "ныть / плакаться по радио",
 }
 
 

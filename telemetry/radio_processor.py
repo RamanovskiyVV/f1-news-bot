@@ -42,6 +42,20 @@ _WHISPER_HALLUCINATIONS = (
     "thanks for watching",
 )
 
+_TRANSCRIPTION_KEYWORDS = [
+    "pit release",
+    "unsafe release",
+    "crying on the radio",
+    "pit lane",
+    "track limits",
+    "team radio",
+    "stewards",
+    "box box",
+    "DRS",
+    "undercut",
+    "overcut",
+]
+
 
 def _is_junk_transcription(text: str) -> bool:
     normalized = " ".join(text.lower().strip().rstrip(".!?,").split())
@@ -57,7 +71,8 @@ _TRANSLATE_SYSTEM = (
     "You are a professional translator specializing in Formula 1. "
     "Translate the following team radio message from English to Russian. "
     "Use natural, idiomatic Russian — translate idioms and expressions by meaning, not word-for-word. "
-    "Preserve the emotional tone, exclamations, and urgency. "
+    "Preserve the emotional tone, jokes, sarcasm, accusations, exclamations, urgency, and profanity. "
+    "Never soften, sanitize, summarize, or explain what the speaker said. "
     "You will be told which driver and team the message is from — use that to resolve ambiguous "
     "engineer callsigns, pronouns, and team-specific shorthand. "
     "Use these established F1 term translations where relevant instead of a literal translation: "
@@ -140,15 +155,39 @@ async def _download_audio(url: str) -> bytes | None:
 
 async def _transcribe(audio_bytes: bytes, acronym: str = "", team: str = "", filename: str = "radio.mp3") -> str:
     driver = DRIVERS.get(acronym.upper(), {})
-    who = f" Driver: {driver.get('name', acronym)} ({team})." if acronym else ""
-    prompt = f"{RADIO_GLOSSARY_PROMPT}{who}"
+    driver_name = driver.get("name", acronym)
+    who = f" Driver: {driver_name} ({team})." if acronym else ""
+    prompt = (
+        "Formula 1 team radio. Preserve exact driver names, jokes, sarcasm, profanity, "
+        f"and motorsport terminology. {RADIO_GLOSSARY_PROMPT}{who}"
+    )
+    keywords = [*_TRANSCRIPTION_KEYWORDS]
+    if driver_name:
+        keywords.append(driver_name)
+    if team:
+        keywords.append(team)
 
-    for attempt in range(2):
+    # Prefer contextual transcription. Retry transient failures, then fall back
+    # to whisper-1 so a model/access issue never silently drops the radio.
+    models = [OPENAI_WHISPER_MODEL, OPENAI_WHISPER_MODEL]
+    if OPENAI_WHISPER_MODEL != "whisper-1":
+        models.append("whisper-1")
+
+    for attempt, model in enumerate(models):
         try:
             buf = io.BytesIO(audio_bytes)
             buf.name = filename
+            if model == "gpt-transcribe":
+                response = await _client.audio.transcriptions.create(
+                    model=model,
+                    file=buf,
+                    prompt=prompt,
+                    extra_body={"keywords": keywords, "languages": ["en"]},
+                )
+                return response.text.strip()
+
             response = await _client.audio.transcriptions.create(
-                model=OPENAI_WHISPER_MODEL,
+                model=model,
                 file=buf,
                 language="en",
                 prompt=prompt,
@@ -156,20 +195,18 @@ async def _transcribe(audio_bytes: bytes, acronym: str = "", team: str = "", fil
             )
             segments = getattr(response, "segments", None) or []
             if not segments:
-                # Some SDK/model combos don't return segments even for verbose_json;
-                # fall back to the plain aggregated text in that case.
-                return response.text
+                return response.text.strip()
             kept = [
                 s.text for s in segments
                 if getattr(s, "no_speech_prob", 0.0) < 0.6 and getattr(s, "avg_logprob", 0.0) > -1.0
             ]
             return "".join(kept).strip()
         except Exception as e:
-            if attempt == 0:
-                logger.warning("Whisper transcription failed, retrying: %s", e)
-                continue
-            logger.warning("Whisper transcription failed: %s", e)
-            return ""
+            has_next = attempt + 1 < len(models)
+            if has_next:
+                logger.warning("Transcription with %s failed, retrying/falling back: %s", model, e)
+            else:
+                logger.warning("Transcription failed with %s: %s", model, e)
     return ""
 
 
