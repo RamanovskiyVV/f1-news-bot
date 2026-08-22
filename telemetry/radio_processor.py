@@ -1,4 +1,4 @@
-"""Team radio pipeline: download → Whisper transcription → GPT-mini filter → translate."""
+"""Team radio pipeline: download → Whisper transcription → translate."""
 from __future__ import annotations
 
 import asyncio
@@ -28,25 +28,28 @@ _semaphore = asyncio.Semaphore(3)
 # Max audio file size to download (2 MB — typical clip is 100-400 KB)
 _MAX_AUDIO_BYTES = 2 * 1024 * 1024
 
-_FILTER_SYSTEM = (
-    "You are a Formula 1 team radio analyst. "
-    "Decide if this transcription is worth sharing with F1 fans. "
-    "Share = strong driver emotion or frustration about racing, funny or memorable moment, "
-    "incident or accident, mechanical failure or car problem (brakes not working, loss of power, vibration, "
-    "hydraulics, mirror broken/missing, DRS stuck, suspension damage, any part of car not working), "
-    "safety car/VSC reaction, strategy disagreement or discussion, tyre degradation or failure, "
-    "driver reporting car handling issues (oversteer, understeer, sliding, can't stop/brake/steer/see properly), "
-    "team orders or position swaps (hold position, let him past, swap back), "
-    "driver being told or telling to push/attack/defend, urgency calls during race, "
-    "driver reacting to a lap time or sector, driver commenting on another driver's move or incident, "
-    "unusual or quotable line. "
-    "Don't share = pure gap/position numbers with no emotion, single-word confirmations like 'Copy' or 'OK', "
-    "trivial PERSONAL comfort (earplugs, seat padding, heat, visor fogging, drinks), "
-    "routine setup adjustments (wing angle, brake bias tweak, diff setting, engine mode change with no drama), "
-    "routine pit call confirmations, inaudible or unclear audio transcribed as dots or silence. "
-    "Important: ANY report of a broken/damaged car part or car not behaving is ALWAYS share. "
-    "When in doubt, share. Reply with exactly one line: YES or NO"
+# Relevance is intentionally a narrow deterministic deny-list.  A previous GPT
+# classifier dropped memorable messages (sarcasm, comments about rivals, etc.),
+# so any meaningful multi-word transcription is now shared by default.
+_TRIVIAL_RADIO = {
+    "copy", "ok", "okay", "roger", "understood", "affirm", "affirmative",
+    "yes", "no", "sure", "alright", "alright then", "fine", "noted",
+}
+_WHISPER_HALLUCINATIONS = (
+    "thank you for watching",
+    "like and subscribe",
+    "subtitles by",
+    "thanks for watching",
 )
+
+
+def _is_junk_transcription(text: str) -> bool:
+    normalized = " ".join(text.lower().strip().rstrip(".!?,").split())
+    return (
+        normalized in _TRIVIAL_RADIO
+        or any(phrase in normalized for phrase in _WHISPER_HALLUCINATIONS)
+    )
+
 
 _TRANSLATE_TERMS_HINT = "; ".join(f'"{en}" -> "{ru}"' for en, ru in RADIO_TERMS_RU.items())
 
@@ -79,7 +82,7 @@ async def process_radio(
             'translated': str,
             'audio_bytes': bytes,
         }
-        or None if not interesting / download failed.
+        or None if transcription is empty/junk or download failed.
     """
     team_key = DRIVERS.get(acronym.upper(), {}).get("team", "")
     team_name = TEAM_NAMES.get(team_key, "")
@@ -96,17 +99,11 @@ async def process_radio(
             logger.info("Radio skipped (empty transcription): %s", recording_url.split("/")[-1])
             return None
 
-        # 3a. Cheap pre-filter — skip single-word confirmations without spending a GPT call
-        stripped = original.strip().rstrip(".!?,").strip()
-        JUNK = {"copy", "ok", "okay", "roger", "understood", "affirm", "affirmative",
-                "yes", "no", "sure", "alright", "alright then", "fine", "noted"}
-        if stripped.lower() in JUNK:
+        # 3. Skip only obvious confirmations and known Whisper hallucinations.
+        # Everything else is worth sharing; subjective AI relevance filtering
+        # previously discarded some of the best radio messages of a session.
+        if _is_junk_transcription(original):
             logger.info("Radio skipped (junk): %s — %s", acronym, original[:80])
-            return None
-
-        # 3b. GPT relevance filter for anything past the trivial junk check
-        if not await _is_interesting(original, acronym):
-            logger.info("Radio skipped (not interesting): %s — %s", acronym, original[:80])
             return None
 
         logger.info("Radio PASSED filter: %s — %s", acronym, original[:80])
@@ -174,31 +171,6 @@ async def _transcribe(audio_bytes: bytes, acronym: str = "", team: str = "", fil
             logger.warning("Whisper transcription failed: %s", e)
             return ""
     return ""
-
-
-async def _is_interesting(text: str, acronym: str) -> bool:
-    prompt = f"Driver: {acronym}\nRadio message: {text}"
-    for attempt in range(2):
-        try:
-            response = await _client.chat.completions.create(
-                model=OPENAI_FILTER_MODEL,
-                messages=[
-                    {"role": "system", "content": _FILTER_SYSTEM},
-                    {"role": "user", "content": prompt},
-                ],
-                max_tokens=5,
-                temperature=0,
-            )
-            answer = response.choices[0].message.content.strip().upper()
-            return answer.startswith("YES")
-        except Exception as e:
-            if attempt == 0:
-                logger.warning("GPT filter failed, retrying: %s", e)
-                continue
-            # "When in doubt, share" — an API hiccup shouldn't silently drop content.
-            logger.warning("GPT filter failed, defaulting to share: %s", e)
-            return True
-    return True
 
 
 async def _translate(text: str, acronym: str = "", team: str = "") -> str:
