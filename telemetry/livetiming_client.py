@@ -55,7 +55,7 @@ TOPICS = [
 # Base URL for team radio audio files
 AUDIO_BASE = "https://livetiming.formula1.com/"
 
-MessageCallback = Callable[[str, Any], Awaitable[None]]
+MessageCallback = Callable[[str, Any, bool], Awaitable[None]]
 
 
 def _deep_update(target: dict, source: dict) -> dict:
@@ -89,7 +89,7 @@ class LiveTimingClient:
     Usage::
 
         client = LiveTimingClient()
-        client.on_message = my_async_callback   # called as (topic, data)
+        client.on_message = my_async_callback   # called as (topic, data, is_snapshot)
         task = asyncio.create_task(client.run())
         ...
         task.cancel()
@@ -277,7 +277,7 @@ class LiveTimingClient:
                     self._state[topic] = data
                 # Notify handler
                 if self.on_message and self._running:
-                    await self.on_message(topic, data)
+                    await self.on_message(topic, data, False)
 
             elif target == "Subscribe" or args:
                 # Initial full-state snapshot from Subscribe result
@@ -289,7 +289,7 @@ class LiveTimingClient:
                         else:
                             self._state[topic] = data
                         if self.on_message and self._running:
-                            await self.on_message(topic, data)
+                            await self.on_message(topic, data, True)
 
         # Type 3: Completion (response to our Subscribe invocation)
         elif msg_type == 3:
@@ -306,7 +306,7 @@ class LiveTimingClient:
                     else:
                         self._state[topic] = data
                     if self.on_message and self._running:
-                        await self.on_message(topic, data)
+                        await self.on_message(topic, data, True)
 
         # Type 6: Ping / keep-alive
         elif msg_type == 6:

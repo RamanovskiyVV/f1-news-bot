@@ -19,7 +19,7 @@ from .config import (
     TELEMETRY_POLL_INTERVAL,
 )
 from . import fastf1_client as ff1
-from .image_gen import render_race_results_card
+from .image_gen import render_race_results_card, render_race_summary_card
 from .formatter import (
     fmt_fastest_lap,
     fmt_overtake,
@@ -230,6 +230,35 @@ async def _send_photo(photo_bytes: bytes, caption: str = "") -> int | None:
                 return None
         logger.error("Giving up on send_photo after %d retries", _MAX_SEND_RETRIES)
         return None
+
+
+async def _pin_silently(message_id: int) -> bool:
+    """Pin a channel message without generating a service notification."""
+    assert _app
+    for attempt in range(_MAX_SEND_RETRIES):
+        try:
+            await _app.bot.pin_chat_message(
+                chat_id=TELEMETRY_CHANNEL_ID,
+                message_id=message_id,
+                disable_notification=True,
+            )
+            logger.info("Race summary pinned silently (msg_id=%s)", message_id)
+            return True
+        except RetryAfter as e:
+            cooldown = float(e.retry_after) + 1.0
+            logger.warning(
+                "Flood control on pin_chat_message, waiting %.0fs (attempt %d)",
+                cooldown,
+                attempt + 1,
+            )
+            await asyncio.sleep(cooldown)
+        except Exception:
+            # Pinning is optional: lack of channel admin rights must not turn a
+            # successfully published summary into a failed event.
+            logger.exception("Failed to pin race summary; leaving it published")
+            return False
+    logger.error("Giving up on pin_chat_message after %d retries", _MAX_SEND_RETRIES)
+    return False
 
 
 # ── Event callbacks ────────────────────────────────────────────────────────────
@@ -488,8 +517,24 @@ async def _on_race_summary(
     total_laps: int,
     rows: list,
 ) -> None:
-    text = fmt_race_summary(current_lap, total_laps, rows)
-    await _send(text)
+    state = _tracker.current_session
+    meeting_name = state.meeting_name if state else ""
+    try:
+        photo = render_race_summary_card(
+            current_lap=current_lap,
+            total_laps=total_laps,
+            rows=rows,
+            meeting_name=meeting_name,
+        )
+        message_id = await _send_photo(photo)
+        if message_id is not None:
+            await _pin_silently(message_id)
+            return
+    except Exception:
+        logger.exception("Failed to render live race summary card")
+
+    # Preserve the existing text summary as a reliable fallback.
+    await _send(fmt_race_summary(current_lap, total_laps, rows))
 
 
 async def _on_race_control(

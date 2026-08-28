@@ -445,7 +445,9 @@ class SessionTracker:
 
     # -- Live message dispatcher ------------------------------------------------
 
-    async def _on_live_message(self, topic: str, data: Any) -> None:
+    async def _on_live_message(
+        self, topic: str, data: Any, is_snapshot: bool = False
+    ) -> None:
         state = self._state
         if state is None or state.ended:
             return
@@ -462,11 +464,33 @@ class SessionTracker:
             elif topic == "DriverList":
                 self._process_driver_list(data, state)
             elif topic == "TimingAppData":
-                await self._process_timing_app_data(data, state, emit_events=is_live)
+                # TimingAppData feed messages are sparse deltas. The client has
+                # already merged them, so use its accumulated state to reliably
+                # see the new stint and its tyre compound.
+                full_data = (
+                    self._livetiming_client.get_state(topic)
+                    if self._livetiming_client else None
+                )
+                await self._process_timing_app_data(
+                    full_data if isinstance(full_data, dict) else data,
+                    state,
+                    emit_events=is_live and not is_snapshot,
+                )
             elif topic == "TimingData":
                 await self._process_timing_data(data, state, emit_events=is_live)
             elif topic == "PitLaneTimeCollection" and is_live:
-                await self._process_pit_data(data, state)
+                if is_snapshot:
+                    self._baseline_pit_data(data, state)
+                else:
+                    # Complete the changed driver records from accumulated state;
+                    # feed deltas may contain Duration without Lap (or vice versa).
+                    full_data = (
+                        self._livetiming_client.get_state(topic)
+                        if self._livetiming_client else None
+                    )
+                    await self._process_pit_data(
+                        self._complete_changed_pit_data(data, full_data), state
+                    )
             elif topic == "RaceControlMessages":
                 await self._process_rc_messages(data, state)
             elif topic == "TeamRadio" and is_live:
@@ -597,6 +621,23 @@ class SessionTracker:
 
     # -- TimingAppData (tyres + pit detection via stint count) ------------------
 
+    @staticmethod
+    def _ordered_stints(stints: Any) -> list[dict]:
+        """Return stints in stint-number order for snapshots and merged deltas."""
+        if isinstance(stints, list):
+            return [s for s in stints if isinstance(s, dict)]
+        if not isinstance(stints, dict):
+            return []
+
+        def _key(item: tuple[Any, Any]) -> tuple[int, Any]:
+            key = item[0]
+            try:
+                return (0, int(key))
+            except (TypeError, ValueError):
+                return (1, str(key))
+
+        return [s for _, s in sorted(stints.items(), key=_key) if isinstance(s, dict)]
+
     async def _process_timing_app_data(self, data: dict, state: SessionState, emit_events: bool = True) -> None:
         lines = data.get("Lines", {})
         if not isinstance(lines, dict):
@@ -609,10 +650,8 @@ class SessionTracker:
             except ValueError:
                 continue
 
-            stints = info.get("Stints", {})
-            if isinstance(stints, dict):
-                stints = list(stints.values())
-            if not isinstance(stints, list) or not stints:
+            stints = self._ordered_stints(info.get("Stints", {}))
+            if not stints:
                 continue
 
             last_stint = stints[-1]
@@ -831,6 +870,46 @@ class SessionTracker:
 
     # -- PitLaneTimeCollection --------------------------------------------------
 
+    @staticmethod
+    def _complete_changed_pit_data(data: Any, full_data: Any) -> dict:
+        """Fill sparse pit deltas, without replaying unchanged driver records."""
+        if not isinstance(data, dict):
+            return {}
+        changed = data.get("PitTimes", {})
+        if not isinstance(changed, dict):
+            return data
+        full = full_data.get("PitTimes", {}) if isinstance(full_data, dict) else {}
+        if not isinstance(full, dict):
+            full = {}
+        return {
+            "PitTimes": {
+                rn: full.get(rn, info)
+                for rn, info in changed.items()
+            }
+        }
+
+    @staticmethod
+    def _baseline_pit_data(data: Any, state: SessionState) -> None:
+        """Remember historical stops from a subscription snapshot without firing."""
+        if not isinstance(data, dict):
+            return
+        pit_times = data.get("PitTimes", {})
+        if not isinstance(pit_times, dict):
+            return
+        for rn_str, info in pit_times.items():
+            if not isinstance(info, dict):
+                continue
+            try:
+                dn = int(rn_str)
+                lap_raw = info.get("Lap") or info.get("LapNumber")
+                lap = int(lap_raw) if lap_raw is not None else None
+            except (TypeError, ValueError):
+                continue
+            if lap is not None:
+                state._last_pit_lap[dn] = max(
+                    lap, state._last_pit_lap.get(dn, lap)
+                )
+
     async def _process_pit_data(self, data: dict, state: SessionState) -> None:
         pit_times = data.get("PitTimes", {})
         if not isinstance(pit_times, dict):
@@ -942,6 +1021,7 @@ class SessionTracker:
                 "compound": compound,
                 "tyre_age": tyre_age,
                 "pit_count": state.pit_counts.get(dn, 0),
+                "gap": state.race_gaps.get(dn, ""),
             })
 
         await self.on_race_summary(
