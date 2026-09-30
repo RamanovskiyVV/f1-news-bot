@@ -67,7 +67,7 @@ ROW_H = 92
 
 
 @lru_cache(maxsize=32)
-def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
+def _font(size: int, bold: bool = False) -> ImageFont.ImageFont:
     filename = "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"
     candidates = (
         _ASSETS_DIR / filename,
@@ -79,7 +79,15 @@ def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
         if path.exists():
             return ImageFont.truetype(str(path), size)
     # Pillow distributions commonly bundle DejaVu and resolve it by filename.
-    return ImageFont.truetype(filename, size)
+    # Minimal production images may not ship any system fonts, so keep card
+    # rendering alive with Pillow's embedded font instead of crashing the bot.
+    try:
+        return ImageFont.truetype(filename, size)
+    except OSError:
+        try:
+            return ImageFont.load_default(size=size)
+        except TypeError:  # Pillow < 10.1 has no scalable default font.
+            return ImageFont.load_default()
 
 
 def _fit_text(
@@ -90,7 +98,7 @@ def _fit_text(
     *,
     bold: bool = False,
     min_size: int = 20,
-) -> ImageFont.FreeTypeFont:
+) -> ImageFont.ImageFont:
     """Choose the largest font that fits the available width."""
     while size > min_size:
         font = _font(size, bold=bold)
