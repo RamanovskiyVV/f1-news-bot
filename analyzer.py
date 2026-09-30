@@ -11,6 +11,7 @@ from typing import Optional
 from openai import AsyncOpenAI
 
 from config import OPENAI_API_KEY, OPENAI_MODEL, OPENAI_MODEL_GENERATE
+from openai_utils import chat_completion_options
 from scraper import NewsItem
 
 logger = logging.getLogger(__name__)
@@ -120,8 +121,8 @@ async def analyze_news_batch(news_items: list[NewsItem]) -> list[NewsItem]:
                 {"role": "user", "content": instructions},
                 {"role": "user", "content": news_data},
             ],
-            temperature=0.3,
             response_format={"type": "json_object"},
+            **chat_completion_options(OPENAI_MODEL, temperature=0.3),
         )
 
         content = response.choices[0].message.content
@@ -198,7 +199,7 @@ async def generate_news_post(
         response = await client.chat.completions.create(
             model=OPENAI_MODEL_GENERATE,
             messages=messages,
-            temperature=0.7,
+            **chat_completion_options(OPENAI_MODEL_GENERATE, temperature=0.7),
         )
 
         post = response.choices[0].message.content.strip()
@@ -263,8 +264,8 @@ async def deduplicate_news(
                 {"role": "user", "content": sent_msg},
                 {"role": "user", "content": candidates_msg},
             ],
-            temperature=0.1,
             response_format={"type": "json_object"},
+            **chat_completion_options(OPENAI_MODEL, temperature=0.1),
         )
 
         content = response.choices[0].message.content
@@ -327,8 +328,8 @@ async def find_related_post(
                 {"role": "user", "content": posts_msg},
                 {"role": "user", "content": new_msg},
             ],
-            temperature=0.1,
             response_format={"type": "json_object"},
+            **chat_completion_options(OPENAI_MODEL, temperature=0.1),
         )
 
         content = response.choices[0].message.content
@@ -373,7 +374,7 @@ async def translate_meme_caption(title: str) -> str:
                 {"role": "user", "content": instructions},
                 {"role": "user", "content": f"Подпись мема: {title}"},
             ],
-            temperature=0.7,
+            **chat_completion_options(OPENAI_MODEL_GENERATE, temperature=0.7),
         )
 
         translated = response.choices[0].message.content.strip()

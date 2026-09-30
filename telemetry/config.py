@@ -11,8 +11,8 @@ TELEMETRY_CHANNEL_ID = os.getenv("TELEMETRY_CHANNEL_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # High-accuracy file transcription with F1 context/keyword hints. Keep the env
 # override so the model can be changed without another deploy.
-OPENAI_WHISPER_MODEL = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-transcribe")
-OPENAI_FILTER_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_TRANSCRIBE_MODEL = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-transcribe")
+OPENAI_TRANSLATION_MODEL = os.getenv("OPENAI_TRANSLATION_MODEL", "gpt-6.1-sol")
 
 # Polling
 TELEMETRY_POLL_INTERVAL = int(os.getenv("TELEMETRY_POLL_INTERVAL", "15"))
@@ -46,20 +46,21 @@ DRIVERS: dict[str, dict] = {
     "ALO": {"flag": "🇪🇸", "name": "Alonso",       "team": "aston_martin"},
     "STR": {"flag": "🇨🇦", "name": "Stroll",       "team": "aston_martin"},
     "GAS": {"flag": "🇫🇷", "name": "Gasly",        "team": "alpine"},
-    "DOO": {"flag": "🇦🇺", "name": "Doohan",       "team": "alpine"},
-    "TSU": {"flag": "🇯🇵", "name": "Tsunoda",      "team": "red_bull"},
+    "COL": {"flag": "🇦🇷", "name": "Colapinto",    "team": "alpine"},
     "LAW": {"flag": "🇳🇿", "name": "Lawson",       "team": "racing_bulls"},
-    "HAD": {"flag": "🇫🇷", "name": "Hadjar",       "team": "racing_bulls"},
-    "HUL": {"flag": "🇩🇪", "name": "Hulkenberg",   "team": "sauber"},
-    "BOR": {"flag": "🇧🇷", "name": "Bortoleto",    "team": "sauber"},
+    "LIN": {"flag": "🇬🇧", "name": "Lindblad",     "team": "racing_bulls"},
+    "HAD": {"flag": "🇫🇷", "name": "Hadjar",       "team": "red_bull"},
+    "HUL": {"flag": "🇩🇪", "name": "Hulkenberg",   "team": "audi"},
+    "BOR": {"flag": "🇧🇷", "name": "Bortoleto",    "team": "audi"},
     "ALB": {"flag": "🇹🇭", "name": "Albon",        "team": "williams"},
     "OCO": {"flag": "🇫🇷", "name": "Ocon",         "team": "haas"},
     "BEA": {"flag": "🇬🇧", "name": "Bearman",      "team": "haas"},
-    # Reserve / test / FP1 drivers
     "PER": {"flag": "🇲🇽", "name": "Perez",         "team": "cadillac"},
-    "BOT": {"flag": "🇫🇮", "name": "Bottas",       "team": "sauber"},
-    "LIN": {"flag": "🇬🇧", "name": "Lindblad",     "team": "red_bull"},
-    "COL": {"flag": "🇦🇷", "name": "Colapinto",    "team": "alpine"},
+    "BOT": {"flag": "🇫🇮", "name": "Bottas",       "team": "cadillac"},
+    # 2026 substitute / reserve driver who has started races.
+    "TSU": {"flag": "🇯🇵", "name": "Tsunoda",      "team": "racing_bulls"},
+    # Historical / test drivers retained for old sessions and FP1 feeds.
+    "DOO": {"flag": "🇦🇺", "name": "Doohan",       "team": "alpine"},
     "FIT": {"flag": "🇧🇷", "name": "Fittipaldi",   "team": "haas"},
     "MAZ": {"flag": "🇷🇺", "name": "Mazepin",      "team": "sauber"},
     "ZHO": {"flag": "🇨🇳", "name": "Zhou",         "team": "sauber"},
@@ -77,7 +78,8 @@ TEAM_NAMES: dict[str, str] = {
     "aston_martin": "Aston Martin",
     "alpine":       "Alpine",
     "racing_bulls": "Racing Bulls",
-    "sauber":       "Kick Sauber",
+    "audi":         "Audi",
+    "sauber":       "Kick Sauber",  # historical sessions through 2025
     "williams":     "Williams",
     "haas":         "Haas",
     "cadillac":     "Cadillac",
@@ -113,8 +115,8 @@ POSITION_MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
 
 # Racing number → acronym fallback (used when DriverList not yet received)
 RACING_NUMBER_TO_ACR: dict[int, str] = {
-    1:  "VER",
-    4:  "NOR",
+    3:  "VER",
+    1:  "NOR",
     16: "LEC",
     81: "PIA",
     55: "SAI",
@@ -124,9 +126,9 @@ RACING_NUMBER_TO_ACR: dict[int, str] = {
     14: "ALO",
     18: "STR",
     10: "GAS",
-    7:  "DOO",
-    22: "TSU",
+    43: "COL",
     30: "LAW",
+    41: "LIN",
     6:  "HAD",
     27: "HUL",
     5:  "BOR",
@@ -135,14 +137,12 @@ RACING_NUMBER_TO_ACR: dict[int, str] = {
     87: "BEA",
     11: "PER",
     77: "BOT",
-    43: "COL",
+    22: "TSU",
 }
 
 
-# Short vocabulary hint passed to Whisper's `prompt` param to bias transcription
-# toward F1 team-radio jargon and away from noise-driven mishearing. Whisper's
-# prompt window is small (~224 tokens) so keep this tight — driver/team names are
-# appended per-message in radio_processor.py.
+# Short vocabulary hint passed to the transcription prompt to bias recognition
+# toward F1 team-radio jargon and away from noise-driven mishearing.
 RADIO_GLOSSARY_PROMPT = (
     "Box box box, pit confirm, push now, gap is, DRS, undercut, overcut, "
     "safety car, virtual safety car, VSC, box this lap, box next lap, "

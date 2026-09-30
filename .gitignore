@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 .env
+env
+*.pem
 venv/
 .venv/
 DEPLOY.md

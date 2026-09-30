@@ -33,6 +33,7 @@ TEAM_COLORS = {
     "aston_martin": (34, 153, 113),
     "alpine": (255, 116, 180),
     "racing_bulls": (102, 146, 255),
+    "audi": (190, 30, 45),
     "sauber": (82, 226, 82),
     "williams": (0, 144, 255),
     "haas": (190, 198, 207),

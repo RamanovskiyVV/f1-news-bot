@@ -7,13 +7,14 @@ import logging
 
 import httpx
 from openai import AsyncOpenAI
+from openai_utils import chat_completion_options
 
 from .config import (
     DRIVERS,
     F1_SUBSCRIPTION_TOKEN,
     OPENAI_API_KEY,
-    OPENAI_FILTER_MODEL,
-    OPENAI_WHISPER_MODEL,
+    OPENAI_TRANSLATION_MODEL,
+    OPENAI_TRANSCRIBE_MODEL,
     RADIO_GLOSSARY_PROMPT,
     RADIO_TERMS_RU,
     TEAM_NAMES,
@@ -108,7 +109,7 @@ async def process_radio(
         if not audio_bytes:
             return None
 
-        # 2. Transcribe via Whisper (~$0.006/min, typical clip ≈ 20s ≈ $0.002)
+        # 2. Transcribe with the current high-accuracy file-transcription model.
         original = await _transcribe(audio_bytes, acronym=acronym, team=team_name, filename="radio.mp3")
         if not original or len(original.strip()) < 3:
             logger.info("Radio skipped (empty transcription): %s", recording_url.split("/")[-1])
@@ -167,11 +168,10 @@ async def _transcribe(audio_bytes: bytes, acronym: str = "", team: str = "", fil
     if team:
         keywords.append(team)
 
-    # Prefer contextual transcription. Retry transient failures, then fall back
-    # to whisper-1 so a model/access issue never silently drops the radio.
-    models = [OPENAI_WHISPER_MODEL, OPENAI_WHISPER_MODEL]
-    if OPENAI_WHISPER_MODEL != "whisper-1":
-        models.append("whisper-1")
+    # Retry transient failures. The former whisper-1 fallback is intentionally
+    # gone because that model is deprecated; gpt-transcribe is the supported
+    # high-accuracy model for completed audio files.
+    models = [OPENAI_TRANSCRIBE_MODEL] * 3
 
     for attempt, model in enumerate(models):
         try:
@@ -216,13 +216,16 @@ async def _translate(text: str, acronym: str = "", team: str = "") -> str:
     for attempt in range(2):
         try:
             response = await _client.chat.completions.create(
-                model=OPENAI_FILTER_MODEL,
+                model=OPENAI_TRANSLATION_MODEL,
                 messages=[
                     {"role": "system", "content": _TRANSLATE_SYSTEM},
                     {"role": "user", "content": user_content},
                 ],
-                max_tokens=200,
-                temperature=0.3,
+                **chat_completion_options(
+                    OPENAI_TRANSLATION_MODEL,
+                    temperature=0.3,
+                    max_tokens=400,
+                ),
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
