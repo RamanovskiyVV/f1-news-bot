@@ -3,11 +3,13 @@ import logging
 import os
 
 from .bot import build_app
+from logging_utils import install_secret_redaction
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     level=logging.INFO,
 )
+install_secret_redaction()
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("fastf1").setLevel(logging.WARNING)

@@ -10,6 +10,7 @@ from telegram import Update
 
 from config import TELEGRAM_BOT_TOKEN, OPENAI_API_KEY, TELEGRAM_CHANNEL_ID
 from bot import create_bot
+from logging_utils import install_secret_redaction
 
 # Настройка логирования
 logging.basicConfig(
@@ -20,6 +21,9 @@ logging.basicConfig(
         logging.FileHandler("bot.log", encoding="utf-8"),
     ],
 )
+install_secret_redaction()
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
