@@ -93,6 +93,27 @@ class PitTrackingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("MEDIUM", self.events[0]["compound"])
         self.assertEqual(20, self.events[0]["lap_number"])
 
+    async def test_snapshot_rebuilds_pit_count_without_replaying_events(self) -> None:
+        snapshot = {
+            "Lines": {
+                "1": {
+                    "Stints": {
+                        "0": {"Compound": "SOFT", "LapNumber": 1},
+                        "1": {"Compound": "MEDIUM", "LapNumber": 18},
+                        "2": {"Compound": "HARD", "LapNumber": 36},
+                    }
+                }
+            }
+        }
+        self.client.state["TimingAppData"] = snapshot
+
+        await self.tracker._on_live_message(
+            "TimingAppData", snapshot, is_snapshot=True
+        )
+
+        self.assertEqual([], self.events)
+        self.assertEqual(2, self.state.pit_counts[1])
+
 
 if __name__ == "__main__":
     unittest.main()

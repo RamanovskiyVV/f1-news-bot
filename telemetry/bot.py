@@ -396,7 +396,7 @@ async def _on_session_end(
             return
 
     # ── Race / Sprint: instant from SignalR positions + gaps ─────────────────
-    if is_race and live_positions:
+    if is_race and live_positions and len(live_positions) >= 10:
         sorted_pos = sorted(live_positions.items(), key=lambda x: x[1])
         results = []
         for dn, pos in sorted_pos:
@@ -439,6 +439,17 @@ async def _on_session_end(
         sent = await _send_session_results(session)
         if sent and sk:
             _mark_sent(sk)
+        elif not sent and sk and _app:
+            # Classification APIs can lag behind the chequered flag. Retry in
+            # the background; each job checks the sent marker first.
+            for delay in (5 * 60, 20 * 60):
+                _app.job_queue.run_once(
+                    _retry_results_job,
+                    when=delay,
+                    data=dict(session),
+                    name=f"retry_results_{sk}_{delay}",
+                )
+            logger.info("Scheduled result retries for session %s", sk)
     except Exception:
         logger.exception("FastF1 fallback failed for %s %s",
                          session.get("meeting_name"), session.get("session_name"))
@@ -449,18 +460,17 @@ async def _retry_results_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     session = context.job.data
     if not session:
         return
+    sk = session.get("session_key", "")
+    if sk and _already_sent(sk):
+        return
     logger.info("Retrying FastF1 results for %s %s",
                 session.get("meeting_name"), session.get("session_name"))
     sent = await _send_session_results(session)
     if sent:
         logger.info("Retry succeeded for %s %s",
                     session.get("meeting_name"), session.get("session_name"))
-        # Cancel remaining retries for this session
-        name_prefix = f"retry_results_{session.get('session_key', 'unknown')}"
-        assert _app
-        for job in _app.job_queue.get_jobs_by_name(""):
-            if hasattr(job, 'name') and job.name and job.name.startswith(name_prefix):
-                job.schedule_removal()
+        if sk:
+            _mark_sent(sk)
 
 
 async def _gather_race_data(year: int, gp: str, session_id: str):
@@ -517,6 +527,12 @@ async def _on_race_summary(
     total_laps: int,
     rows: list,
 ) -> None:
+    if len(rows) < 10:
+        logger.warning(
+            "Race summary not sent: incomplete position table (%d rows)",
+            len(rows),
+        )
+        return
     state = _tracker.current_session
     meeting_name = state.meeting_name if state else ""
     try:

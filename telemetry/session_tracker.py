@@ -200,6 +200,10 @@ class SessionTracker:
         self._livetiming_client: LiveTimingClient | None = None
         self._startup_check_done: bool = False  # fire missed-session only once on startup
         self._livetiming_connected_at: datetime | None = None  # UTC time of last SignalR connect
+        # Once SessionInfo arrives from the live feed, SignalR is authoritative
+        # until it reports Finished/Finalised. Scheduled timestamps cannot account
+        # for delayed starts, red flags, or long suspensions.
+        self._livetiming_session_confirmed: bool = False
         self._started_at: datetime = datetime.now(timezone.utc)  # process start time
 
     # -- Public -----------------------------------------------------------------
@@ -219,6 +223,17 @@ class SessionTracker:
     # -- Session detection ------------------------------------------------------
 
     async def _poll_inner(self, client: OpenF1Client) -> None:
+        # Never let a stale schedule or OpenF1's `latest` fallback replace an
+        # active live session. SessionStatus from SignalR will end it.
+        if (
+            self._livetiming_session_confirmed
+            and self._state is not None
+            and self._state.started
+            and not self._state.ended
+        ):
+            self._start_livetiming()
+            return
+
         # Try OpenF1 first (works between sessions; returns 401 during live)
         session_doc = await client.get_latest_session()
 
@@ -423,6 +438,7 @@ class SessionTracker:
                 pass
         self._livetiming_task   = None
         self._livetiming_client = None
+        self._livetiming_session_confirmed = False
 
     async def _trigger_session_end(self) -> None:
         """Mark session as ended, stop live timing, fire on_session_end."""
@@ -526,6 +542,8 @@ class SessionTracker:
 
         if not session_name or session_key == -1:
             return  # incomplete snapshot, wait for next
+
+        self._livetiming_session_confirmed = True
 
         # Convert local time + GMT offset to UTC
         def _to_utc(local_str: str) -> str | None:
@@ -666,6 +684,13 @@ class SessionTracker:
             # Pit detection: new stint appeared = driver pitted
             stint_count = len(stints)
             prev_count = state._stint_counts.get(dn, 0)
+            # Rebuild the counter from a subscription snapshot after reconnects
+            # or restarts, without replaying historical pit notifications.
+            if not emit_events:
+                state.pit_counts[dn] = max(
+                    state.pit_counts.get(dn, 0),
+                    max(0, stint_count - 1),
+                )
             if stint_count > prev_count and prev_count > 0 and emit_events:
                 import time as _time
                 _now = _time.monotonic()
@@ -749,8 +774,8 @@ class SessionTracker:
                 state._last_pit_lap[dn] = lap
             state.pit_counts[dn] = state.pit_counts.get(dn, 0) + 1
             acr = _resolve_driver(dn, state.driver_map)
-            logger.debug("Pit fire for %s lap=%s compound=%s confirmed=%s",
-                         acr, lap, compound, confirmed)
+            logger.info("Pit fire for %s lap=%s compound=%s confirmed=%s",
+                        acr, lap, compound, confirmed)
             if self.on_pit_stop:
                 await self.on_pit_stop(
                     acronym=acr,
@@ -1007,8 +1032,6 @@ class SessionTracker:
         if state.current_lap - state.last_summary_lap < _SUMMARY_LAP_INTERVAL:
             return
 
-        state.last_summary_lap = state.current_lap
-
         rows = []
         for dn, pos in sorted(state.last_positions.items(), key=lambda kv: kv[1]):
             acr = _resolve_driver(dn, state.driver_map)
@@ -1023,6 +1046,18 @@ class SessionTracker:
                 "pit_count": state.pit_counts.get(dn, 0),
                 "gap": state.race_gaps.get(dn, ""),
             })
+
+        # LapCount can arrive before positions after a reconnect. Do not send an
+        # empty/partial table, and allow a later update to retry this summary.
+        if len(rows) < 10:
+            logger.warning(
+                "Race summary deferred at lap %s: only %d position rows available",
+                state.current_lap,
+                len(rows),
+            )
+            return
+
+        state.last_summary_lap = state.current_lap
 
         await self.on_race_summary(
             current_lap=state.current_lap,
@@ -1125,6 +1160,17 @@ class SessionTracker:
         if not isinstance(captures, list):
             return
 
+        # Recover the static session folder from the authoritative live snapshot
+        # when state was created before SessionInfo.Path was populated.
+        if not state.session_path and self._livetiming_client:
+            session_info = self._livetiming_client.get_state("SessionInfo")
+            if isinstance(session_info, dict):
+                live_path = session_info.get("Path", "")
+                if live_path:
+                    state.session_path = live_path
+        if not state.session_path and state.session_key != -1:
+            state.session_path = await _fetch_session_path(state.session_key)
+
         now_utc = datetime.now(timezone.utc)
         # Ignore radio messages older than 90s at the moment of SignalR connect —
         # those are historical backlog replayed on reconnect, not live events.
@@ -1138,12 +1184,21 @@ class SessionTracker:
             path = capture.get("Path", "")
             if not path:
                 continue
-            # Build correct URL: base + "static/" + session_path + path
-            # e.g. https://livetiming.formula1.com/static/2026/.../TeamRadio/file.mp3
-            if state.session_path and not path.startswith("static/"):
-                url = AUDIO_BASE + "static/" + state.session_path + path
+            # A bare TeamRadio/... URL returns 403. Never mark it seen until the
+            # static session folder is known, so it remains retryable.
+            if path.startswith(("https://", "http://")):
+                url = path
+            elif path.lstrip("/").startswith("static/"):
+                url = AUDIO_BASE + path.lstrip("/")
+            elif state.session_path:
+                session_path = state.session_path.strip("/") + "/"
+                url = AUDIO_BASE + "static/" + session_path + path.lstrip("/")
             else:
-                url = AUDIO_BASE + path
+                logger.warning(
+                    "TeamRadio deferred: session path unavailable for %s",
+                    path.split("/")[-1],
+                )
+                continue
             if url in state.seen_radio:
                 continue
             state.seen_radio.add(url)

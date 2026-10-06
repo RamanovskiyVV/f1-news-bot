@@ -8,13 +8,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="fastf1")
+_CACHE_DIR = Path(tempfile.gettempdir()) / "fastf1_cache"
 
 
 def _run_sync(fn, *args, **kwargs):
@@ -25,9 +28,15 @@ def _run_sync(fn, *args, **kwargs):
 
 # ── FastF1 helpers ─────────────────────────────────────────────────────────────
 
+def _enable_cache(fastf1: Any) -> None:
+    """Create FastF1's cache directory before enabling it."""
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    fastf1.Cache.enable_cache(str(_CACHE_DIR))
+
+
 def _load_session_sync(year: int, gp: str | int, session_identifier: str):
     import fastf1
-    fastf1.Cache.enable_cache("/tmp/fastf1_cache")
+    _enable_cache(fastf1)
     sess = fastf1.get_session(year, gp, session_identifier)
     sess.load(telemetry=False, weather=False, messages=False)
     return sess
@@ -128,7 +137,7 @@ def _get_practice_sync(year: int, gp: str | int, fp_id: str) -> list[dict]:
     try:
         import fastf1
         import pandas as pd
-        fastf1.Cache.enable_cache("/tmp/fastf1_cache")
+        _enable_cache(fastf1)
         sess = fastf1.get_session(year, gp, fp_id)
         sess.load(laps=True, telemetry=False, weather=False, messages=False)
 
@@ -163,7 +172,7 @@ def _get_practice_sync(year: int, gp: str | int, fp_id: str) -> list[dict]:
 def _get_pit_stats_sync(year: int, gp: str | int, session_identifier: str) -> dict:
     try:
         import fastf1
-        fastf1.Cache.enable_cache("/tmp/fastf1_cache")
+        _enable_cache(fastf1)
         sess = fastf1.get_session(year, gp, session_identifier)
         sess.load(telemetry=False, weather=False, messages=False)
         laps = sess.laps
