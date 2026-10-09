@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sys
+import asyncio
 import types
 import unittest
 
@@ -41,6 +42,33 @@ class _LiveState:
 
 
 class SessionResilienceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_final_lap_after_finished_is_in_results(self):
+        tracker = SessionTracker()
+        state = SessionState(1, "Practice 1", "Test GP", 1, started=True)
+        tracker._state = state
+        results = []
+
+        async def on_end(session, **data):
+            results.append(data)
+
+        tracker.on_session_end = on_end
+        await tracker._on_live_message("TimingData", {
+            "Lines": {"63": {"BestLapTime": {"Value": "1:32.000"}}}
+        })
+        await tracker._on_live_message("SessionStatus", {"Status": "Finished"})
+        self.assertFalse(state.ended)
+        self.assertEqual([], results)
+        await tracker._on_live_message("TimingData", {
+            "Lines": {"63": {"BestLapTime": {"Value": "1:30.000"}}}
+        })
+        # Exercise the real call path: completion runs in the receive task.
+        tracker._livetiming_task = asyncio.current_task()
+        await tracker._on_live_message("SessionStatus", {"Status": "Finalised"})
+        await tracker._on_live_message("SessionStatus", {"Status": "Finalised"})
+        self.assertTrue(state.ended)
+        self.assertEqual(1, len(results))
+        self.assertEqual(90.0, results[0]["live_laps"][63])
+
     async def test_confirmed_live_session_ignores_openf1_until_finished(self):
         tracker = SessionTracker()
         original = SessionState(

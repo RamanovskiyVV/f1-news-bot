@@ -409,7 +409,11 @@ class SessionTracker:
 
     def _start_livetiming(self) -> None:
         """Start the SignalR live timing task if not already running."""
-        if self._livetiming_task and not self._livetiming_task.done():
+        # SessionStatus is handled inside this task. Cancelling/awaiting itself
+        # can interrupt publication of the final results.
+        if (self._livetiming_task
+                and self._livetiming_task is not asyncio.current_task()
+                and not self._livetiming_task.done()):
             return
         logger.info("Starting F1 live timing SignalR task")
         self._livetiming_connected_at = datetime.now(timezone.utc)
@@ -1243,7 +1247,8 @@ class SessionTracker:
         # F1 sends "Finished" at the end of each Q segment (Q1/Q2) and also after Race/Practice.
         # F1 sends "Finalised" only after the ENTIRE qualifying session is truly over.
         # For qualifying: only "Finalised" means the whole session is done.
-        # For race/practice: both "Finished" and "Finalised" mean it's done.
+        # Finished stops the session clock; timing updates may still arrive for
+        # drivers completing their final laps. Publish only on Finalised.
         is_quali = "Qualifying" in (state.session_name or "")
         if is_quali:
             if status == "Finalised":
@@ -1252,6 +1257,8 @@ class SessionTracker:
             elif status == "Finished":
                 logger.info("SessionStatus=Finished in Qualifying — treating as segment end, not session end")
         else:
-            if status in ("Finalised", "Finished"):
+            if status == "Finished":
+                logger.info("SessionStatus=Finished: waiting for Finalised and final timing updates")
+            elif status == "Finalised":
                 logger.info("SessionStatus=%s -> triggering end", status)
                 await self._trigger_session_end()
