@@ -34,6 +34,13 @@ class NewsItem:
     content: str = ""
     hype_score: int = 0
     uid: str = ""
+    original_summary: str = ""
+    importance_score: int = 0
+    confidence: str = ""
+    needs_context: bool = False
+    decision_reason: str = ""
+    duplicate_of: str = ""
+    dedup_reason: str = ""
 
     def __post_init__(self):
         if not self.uid:
@@ -87,9 +94,12 @@ def fetch_rss(source: dict) -> list[NewsItem]:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
         response = httpx.get(source["rss"], headers=headers, timeout=15, follow_redirects=True)
+        response.raise_for_status()
         feed = feedparser.parse(response.text)
+        if not feed.entries:
+            raise ValueError("RSS contains no entries")
 
-        for entry in feed.entries[:15]:  # Последние 15 записей
+        for entry in feed.entries:
             title = entry.get("title", "").strip()
             link = entry.get("link", "").strip()
             summary = entry.get("summary", "").strip()
@@ -105,7 +115,7 @@ def fetch_rss(source: dict) -> list[NewsItem]:
                     title=title,
                     url=link,
                     source=source["name"],
-                    summary=summary[:500] if summary else "",
+                    summary=summary[:2000] if summary else "",
                     published=published,
                 ))
 
@@ -121,7 +131,7 @@ def fetch_bluesky(handle: str, name: str) -> list[NewsItem]:
     try:
         url = (
             f"https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed"
-            f"?actor={handle}&limit=15&filter=posts_no_replies"
+            f"?actor={handle}&limit=100&filter=posts_no_replies"
         )
         response = httpx.get(url, timeout=15)
         response.raise_for_status()
@@ -168,6 +178,7 @@ def fetch_article_content(url: str) -> str:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
         response = httpx.get(url, headers=headers, timeout=15, follow_redirects=True)
+        response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
         # Удалить ненужные теги
@@ -200,7 +211,7 @@ def fetch_article_content(url: str) -> str:
         return ""
 
 
-def collect_new_news() -> list[NewsItem]:
+def collect_new_news(source_counts=None) -> list[NewsItem]:
     """
     Собрать новые (ещё не обработанные) новости из всех источников.
     """
@@ -212,6 +223,8 @@ def collect_new_news() -> list[NewsItem]:
     for source in F1_SOURCES:
         logger.info(f"Парсинг {source['name']}...")
         items = fetch_rss(source)
+        if source_counts is not None:
+            source_counts.append((source['name'], len(items)))
         new_items = [item for item in items if item.uid not in seen_set]
         all_news.extend(new_items)
         logger.info(f"  Найдено {len(items)} новостей, новых: {len(new_items)}")
@@ -220,16 +233,11 @@ def collect_new_news() -> list[NewsItem]:
     for bsky in F1_BLUESKY_SOURCES:
         logger.info(f"Парсинг {bsky['name']} (@{bsky['handle']})...")
         items = fetch_bluesky(bsky["handle"], bsky["name"])
+        if source_counts is not None:
+            source_counts.append((bsky['name'], len(items)))
         new_items = [item for item in items if item.uid not in seen_set]
         all_news.extend(new_items)
         logger.info(f"  Найдено {len(items)} постов, новых: {len(new_items)}")
 
-    # Отметить все как просмотренные (добавляем в конец — FIFO)
-    for item in all_news:
-        if item.uid not in seen_set:
-            seen_list.append(item.uid)
-            seen_set.add(item.uid)
-    save_seen(seen_list)
-
     logger.info(f"Всего новых новостей: {len(all_news)}")
-    return all_news
+    return list({item.uid: item for item in all_news}.values())

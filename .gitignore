@@ -14,3 +14,4 @@ owner_chat_id.json
 published_posts.json
 daily_cache.json
 bot.log
+news_queue.sqlite3*

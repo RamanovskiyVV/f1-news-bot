@@ -39,8 +39,10 @@ from config import (
     MEME_CHECK_INTERVAL_MINUTES,
     MEME_MAX_AGE_HOURS,
 )
-from scraper import NewsItem, collect_new_news, fetch_article_content
-from analyzer import analyze_news_batch, generate_news_post, deduplicate_news, find_related_post, translate_meme_caption
+from scraper import NewsItem, fetch_article_content
+from news_pipeline import run_news_check
+from news_queue import NewsQueue
+from analyzer import generate_news_post, find_related_post, translate_meme_caption
 from image_search import search_news_image, download_image
 from meme_scraper import collect_new_memes, MemeItem, load_seen_memes, save_seen_memes, mark_meme_seen, mark_meme_published, clear_seen_memes
 from storage import (
@@ -81,9 +83,6 @@ meme_captions: dict[str, str] = {}
 meme_originals: dict[str, str] = {}
 # chat_id -> uid (режим редактирования подписи мема)
 meme_editing: dict[int, str] = {}
-# Саммари уже отправленных сегодня горячих алертов (для дедупа по теме)
-_sent_topics: list[str] = []
-_sent_topics_date: str = ""
 # Файл-флаг: уведомление о мемах уже отправлено — сбрасывается при /memes
 _MEME_NOTIFIED_FILE = Path(__file__).parent / ".meme_notified"
 
@@ -184,10 +183,10 @@ def format_news_alert(item: NewsItem) -> str:
     """Форматировать новость для отправки пользователю."""
     emoji = hype_emoji(item.hype_score)
     text = (
-        f"{emoji} <b>Хайп: {item.hype_score}/10</b>\n\n"
+        f"{emoji} <b>Важность: {item.importance_score}/10 · Интерес: {item.hype_score}/10</b>\n\n"
         f"<b>{html.escape(item.summary)}</b>\n\n"
         f"📌 Источник: {html.escape(item.source)}\n"
-        f"🔗 <a href=\"{item.url}\">Читать оригинал</a>"
+        f"🔗 <a href=\"{html.escape(item.url, quote=True)}\">Читать оригинал</a>"
     )
     return text
 
@@ -243,7 +242,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Команды:\n"
         "/start — Приветствие\n"
         "/check — Проверить новости прямо сейчас\n"
-        "/digest — Показать новости с хайпом 3-7 за сегодня\n"
+        "/digest — Показать дайджест за сегодня\n"
         "/memes — Свежие мемы из Reddit (r/formuladank)\n"
         "/status — Статус бота\n"
         "/clear — Скрыть просмотренный дайджест\n"
@@ -261,85 +260,56 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /status."""
     if not _is_owner(update.effective_chat.id):
         return
+    queue = NewsQueue()
+    try:
+        counts, retrying, sources = queue.status()
+    finally:
+        queue.close()
+    pending = sum(counts.get(stage, 0) for stage in ('pending', 'review', 'ready'))
+    health = '\n'.join(
+        f"{'✅' if source['count'] else '⚠️'} {source['name']}: {source['count']} записей"
+        for source in sources
+    ) or 'Источники ещё не проверялись'
     await update.message.reply_text(
         f"✅ Бот работает\n"
-        f"📊 Порог хайпа: {HYPE_THRESHOLD}/10\n"
+        f"📊 Порог алертов: {HYPE_THRESHOLD}/10\n"
         f"⏱ Интервал проверки: {CHECK_INTERVAL_MINUTES} мин\n"
-        f"📰 Новостей в кэше: {len(news_cache)}",
+        f"📰 Новостей в кэше: {len(news_cache)}\n"
+        f"⏳ В очереди: {pending}, после ошибок: {retrying}\n\n"
+        f"{html.escape(health)}",
         parse_mode=ParseMode.HTML,
     )
 
 
+async def _send_news_item(item, send_message):
+    news_cache[item.uid] = {
+        "title": item.title, "url": item.url, "source": item.source,
+        "summary": item.summary, "hype_score": item.hype_score,
+    }
+    await send_message(
+        text=format_news_alert(item), parse_mode=ParseMode.HTML,
+        reply_markup=news_alert_keyboard(item.uid), disable_web_page_preview=True,
+    )
+
+
 async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ручная проверка новостей по команде /check."""
+    """Ручная проверка использует ту же очередь, что и фоновая задача."""
     if not _is_owner(update.effective_chat.id):
         return
-    msg = await update.message.reply_text("⏳ Собираю новости...")
-    
+    msg = await update.message.reply_text("⏳ Собираю новости и проверяю очередь...")
     try:
-        news = collect_new_news()
-        if not news:
-            await msg.edit_text("✅ Новых новостей не найдено.")
-            return
-
-        await msg.edit_text(f"🔍 Найдено {len(news)} новостей. Анализирую...")
-
-        # Анализ пачками по 10
-        analyzed = []
-        for i in range(0, len(news), 10):
-            batch = news[i:i + 10]
-            batch = await analyze_news_batch(batch)
-            analyzed.extend(batch)
-
-        # Сохранить ВСЕ проанализированные новости в дневной кэш
-        _save_to_daily_cache(analyzed)
-
-        # Отфильтровать по хайпу
-        hot_news = [n for n in analyzed if n.hype_score >= HYPE_THRESHOLD]
-        hot_news.sort(key=lambda x: x.hype_score, reverse=True)
-
-        if not hot_news:
-            await msg.edit_text(
-                f"📊 Проанализировано {len(analyzed)} новостей.\n"
-                f"Новостей с хайпом ≥ {HYPE_THRESHOLD} не найдено."
-            )
-            return
-
+        async def send(item):
+            await _send_news_item(item, update.message.chat.send_message)
+        stats = await run_news_check(send, _save_to_daily_cache)
         await msg.edit_text(
-            f"📊 Проанализировано {len(analyzed)} новостей.\n"
-            f"🔥 Горячих новостей: {len(hot_news)}"
+            f"📊 Проанализировано: {stats['analyzed']}\n"
+            f"📨 Отправлено: {stats['sent']}\n"
+            f"🔁 Повторы: {stats['duplicates']}\n"
+            f"⏳ Отложено после ошибок: {stats['errors']}"
         )
-
-        # Дедупликация по теме
-        hot_news = await _dedup_hot_news(hot_news)
-        if not hot_news:
-            await msg.edit_text(
-                f"📊 Проанализировано {len(analyzed)} новостей.\n"
-                f"Все горячие новости — дубликаты уже отправленных тем."
-            )
-            return
-
-        # Отправить каждую горячую новость
-        for item in hot_news:
-            news_cache[item.uid] = {
-                "title": item.title,
-                "url": item.url,
-                "source": item.source,
-                "summary": item.summary,
-                "hype_score": item.hype_score,
-            }
-            await update.message.chat.send_message(
-                text=format_news_alert(item),
-                parse_mode=ParseMode.HTML,
-                reply_markup=news_alert_keyboard(item.uid),
-                disable_web_page_preview=True,
-            )
-            _track_sent_topic(item.summary)
-            await asyncio.sleep(0.5)  # Не спамить
-
-    except Exception as e:
-        logger.error(f"Ошибка при проверке новостей: {e}", exc_info=True)
-        await msg.edit_text(f"❌ Ошибка: {str(e)[:200]}")
+    except Exception:
+        logger.exception("Ошибка проверки новостей")
+        await msg.edit_text("❌ Ошибка проверки. Сохранённая очередь будет обработана повторно.")
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1115,28 +1085,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
 
-def _track_sent_topic(summary: str):
-    """Запомнить саммари отправленного алерта для дедупликации по теме."""
-    global _sent_topics, _sent_topics_date
-    today = date.today().isoformat()
-    if _sent_topics_date != today:
-        _sent_topics.clear()
-        _sent_topics_date = today
-    _sent_topics.append(summary)
-
-
-async def _dedup_hot_news(hot_news: list[NewsItem]) -> list[NewsItem]:
-    """Убрать из горячих новостей дубликаты уже отправленных тем."""
-    global _sent_topics, _sent_topics_date
-    today = date.today().isoformat()
-    if _sent_topics_date != today:
-        _sent_topics.clear()
-        _sent_topics_date = today
-    if _sent_topics:
-        hot_news = await deduplicate_news(hot_news, _sent_topics)
-    return hot_news
-
-
 def _save_to_daily_cache(items: list[NewsItem]):
     """Сохранить все проанализированные новости в дневной кэш."""
     today = date.today().isoformat()
@@ -1158,6 +1106,8 @@ def _save_to_daily_cache(items: list[NewsItem]):
                 "source": item.source,
                 "summary": item.summary,
                 "hype_score": item.hype_score,
+                "importance_score": item.importance_score,
+                "decision_reason": item.decision_reason,
             })
             existing_uids.add(item.uid)
 
@@ -1172,7 +1122,7 @@ async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     today = date.today().isoformat()
     today_news = daily_news_cache.get(today, [])
-    medium = [n for n in today_news if 3 <= n["hype_score"] <= 7 and n["uid"] not in digest_seen]
+    medium = [n for n in today_news if 3 <= max(n["hype_score"], n.get("importance_score", 0)) < HYPE_THRESHOLD and n["uid"] not in digest_seen]
 
     if not medium:
         await update.message.reply_text("📭 Нет непросмотренных дайджест-новостей.")
@@ -1190,26 +1140,26 @@ async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /digest — показать новости с хайпом 3-6 за сегодня."""
+    """Команда /digest — показать новости ниже порога алертов за сегодня."""
     if not _is_owner(update.effective_chat.id):
         return
     today = date.today().isoformat()
     today_news = daily_news_cache.get(today, [])
 
-    # Фильтр: хайп от 3 до 7, исключая просмотренные
-    medium_news = [n for n in today_news if 3 <= n["hype_score"] <= 7 and n["uid"] not in digest_seen]
-    medium_news.sort(key=lambda x: x["hype_score"], reverse=True)
+    # Ниже порога алертов по обеим оценкам, исключая просмотренные.
+    medium_news = [n for n in today_news if 3 <= max(n["hype_score"], n.get("importance_score", 0)) < HYPE_THRESHOLD and n["uid"] not in digest_seen]
+    medium_news.sort(key=lambda x: max(x["hype_score"], x.get("importance_score", 0)), reverse=True)
 
     if not medium_news:
         await update.message.reply_text(
-            f"📭 Новостей с хайпом 3-7 за сегодня не найдено.\n\n"
+            f"📭 Новостей для дайджеста за сегодня не найдено.\n\n"
             f"Всего новостей в дневном кэше: {len(today_news)}\n"
             f"Попробуйте сначала /check чтобы собрать свежие новости."
         )
         return
 
     await update.message.reply_text(
-        f"📋 Новости с хайпом 3-7 за сегодня: {len(medium_news)} шт."
+        f"📋 Дайджест за сегодня: {len(medium_news)} шт."
     )
 
     for item_data in medium_news:
@@ -1219,7 +1169,8 @@ async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         emoji = hype_emoji(item_data["hype_score"])
         text = (
-            f"{emoji} <b>Хайп: {item_data['hype_score']}/10</b>\n\n"
+            f"{emoji} <b>Важность: {item_data.get('importance_score', item_data['hype_score'])}/10 · "
+            f"Интерес: {item_data['hype_score']}/10</b>\n\n"
             f"<b>{html.escape(item_data['summary'])}</b>\n\n"
             f"📌 Источник: {html.escape(item_data['source'])}\n"
             f"🔗 <a href=\"{item_data['url']}\">Читать оригинал</a>"
@@ -1234,65 +1185,19 @@ async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def scheduled_check(context: ContextTypes.DEFAULT_TYPE):
-    """Фоновая задача — автоматическая проверка новостей."""
-    logger.info("Запуск автоматической проверки новостей...")
-
+    """Фоновая проверка с восстановлением очереди после сбоев."""
     if owner_chat_id is None:
         logger.warning("owner_chat_id не задан. Отправьте /start боту.")
         return
-
     try:
-        news = collect_new_news()
-        if not news:
-            logger.info("Новых новостей не найдено.")
-            return
-
-        # Анализ пачками
-        analyzed = []
-        for i in range(0, len(news), 10):
-            batch = news[i:i + 10]
-            batch = await analyze_news_batch(batch)
-            analyzed.extend(batch)
-
-        # Сохранить ВСЕ проанализированные новости в дневной кэш
-        _save_to_daily_cache(analyzed)
-
-        # Отфильтровать по хайпу
-        hot_news = [n for n in analyzed if n.hype_score >= HYPE_THRESHOLD]
-        hot_news.sort(key=lambda x: x.hype_score, reverse=True)
-
-        if not hot_news:
-            logger.info(f"Проанализировано {len(analyzed)} новостей, горячих нет.")
-            return
-
-        # Дедупликация по теме — убрать новости на ту же тему, что уже отправлялись
-        hot_news = await _dedup_hot_news(hot_news)
-        if not hot_news:
-            logger.info("Все горячие новости отфильтрованы как дубликаты тем.")
-            return
-
-        logger.info(f"Найдено {len(hot_news)} горячих новостей!")
-
-        for item in hot_news:
-            news_cache[item.uid] = {
-                "title": item.title,
-                "url": item.url,
-                "source": item.source,
-                "summary": item.summary,
-                "hype_score": item.hype_score,
-            }
-            await context.bot.send_message(
-                chat_id=owner_chat_id,
-                text=format_news_alert(item),
-                parse_mode=ParseMode.HTML,
-                reply_markup=news_alert_keyboard(item.uid),
-                disable_web_page_preview=True,
-            )
-            _track_sent_topic(item.summary)
-            await asyncio.sleep(0.5)
-
-    except Exception as e:
-        logger.error(f"Ошибка автоматической проверки: {e}", exc_info=True)
+        async def send(item):
+            async def send_message(**kwargs):
+                return await context.bot.send_message(chat_id=owner_chat_id, **kwargs)
+            await _send_news_item(item, send_message)
+        stats = await run_news_check(send, _save_to_daily_cache)
+        logger.info("Проверка новостей: %s", stats)
+    except Exception:
+        logger.exception("Ошибка автоматической проверки; очередь сохранена")
 
 
 async def post_init(application: Application):
@@ -1300,7 +1205,7 @@ async def post_init(application: Application):
     await application.bot.set_my_commands([
         BotCommand("start", "Приветствие и справка"),
         BotCommand("check", "Проверить новости прямо сейчас"),
-        BotCommand("digest", "Дайджест новостей (хайп 3-7) за сегодня"),
+        BotCommand("digest", "Дайджест новостей за сегодня"),
         BotCommand("memes", "Мемы из Reddit (r/formuladank)"),
         BotCommand("status", "Статус бота"),
         BotCommand("clear", "Скрыть просмотренный дайджест"),

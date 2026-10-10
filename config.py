@@ -13,10 +13,14 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-6-luna")
 # Higher-quality model for public-facing posts and humour-sensitive translation.
 OPENAI_MODEL_GENERATE = os.getenv("OPENAI_MODEL_GENERATE", "gpt-6.1-sol")
+OPENAI_MODEL_REVIEW = os.getenv("OPENAI_MODEL_REVIEW", OPENAI_MODEL_GENERATE)
 
 # Scraping
 CHECK_INTERVAL_MINUTES = int(os.getenv("CHECK_INTERVAL_MINUTES", "10"))
 HYPE_THRESHOLD = int(os.getenv("HYPE_THRESHOLD", "8"))
+NEWS_REVIEW_MIN_SCORE = int(os.getenv("NEWS_REVIEW_MIN_SCORE", "6"))
+NEWS_MAX_PER_CHECK = max(1, int(os.getenv("NEWS_MAX_PER_CHECK", "100")))
+NEWS_MAX_AGE_HOURS = max(1, int(os.getenv("NEWS_MAX_AGE_HOURS", "72")))
 
 # Google Custom Search (для поиска фото к новостям)
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
